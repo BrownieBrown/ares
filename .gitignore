@@ -1,0 +1,42 @@
+# Build artifacts
+build/
+cmake-build-*/
+out/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Clangd and language server cache
+.cache/
+compile_commands.json
+
+# Sensitive data - NEVER COMMIT
+# Bank CSV exports contain personal financial information
+data/
+*.csv
+
+# User data directory (database, config, imports)
+# Located at ~/.ares/ - not in repo, but listed for awareness
+
+# Test artifacts
+Testing/
+*.gcov
+*.gcda
+*.gcno
+
+# Dependencies (fetched by CMake)
+_deps/
+
+# Compiled objects
+*.o
+*.a
+*.so
+*.dylib
+
+# Debug files
+*.dSYM/
