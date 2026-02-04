@@ -1,4 +1,4 @@
-#include "infrastructure/import/IngCsvImporter.hpp"
+#include "infrastructure/import/IngDeCsvImporter.hpp"
 
 // Stub implementation - will be expanded later
 namespace ares::application::services {

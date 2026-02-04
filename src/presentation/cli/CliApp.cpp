@@ -25,9 +25,20 @@ namespace ares::presentation::cli {
 
 namespace {
 
-auto getDatabase() -> std::expected<std::shared_ptr<infrastructure::persistence::DatabaseConnection>, core::Error> {
+auto getHomeDir() -> std::expected<std::filesystem::path, core::Error> {
     auto homeDir = std::getenv("HOME");
-    std::filesystem::path dataDir = std::filesystem::path{homeDir} / ".ares";
+    if (!homeDir) {
+        return std::unexpected(core::IoError{"HOME", "environment variable not set"});
+    }
+    return std::filesystem::path{homeDir};
+}
+
+auto getDatabase() -> std::expected<std::shared_ptr<infrastructure::persistence::DatabaseConnection>, core::Error> {
+    auto homeDirResult = getHomeDir();
+    if (!homeDirResult) {
+        return std::unexpected(homeDirResult.error());
+    }
+    std::filesystem::path dataDir = *homeDirResult / ".ares";
     std::filesystem::create_directories(dataDir);
     auto dbPath = dataDir / "ares.db";
 
@@ -211,8 +222,11 @@ auto printTransactionSummary(const infrastructure::import::IngDeImportResult& re
 
 // Auto-import CSV files from ~/.ares/import/ directory
 auto autoImportCsvFiles(std::shared_ptr<infrastructure::persistence::DatabaseConnection> db) -> int {
-    auto homeDir = std::getenv("HOME");
-    std::filesystem::path importDir = std::filesystem::path{homeDir} / ".ares" / "import";
+    auto homeDirResult = getHomeDir();
+    if (!homeDirResult) {
+        return 0;  // Can't determine home directory
+    }
+    std::filesystem::path importDir = *homeDirResult / ".ares" / "import";
 
     if (!std::filesystem::exists(importDir)) {
         return 0;  // No import directory, nothing to do
@@ -323,22 +337,12 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         printTransactionSummary(*result);
 
         // Initialize database
-        auto homeDir = std::getenv("HOME");
-        std::filesystem::path dataDir = std::filesystem::path{homeDir} / ".ares";
-        std::filesystem::create_directories(dataDir);
-        auto dbPath = dataDir / "ares.db";
-
-        auto dbResult = infrastructure::persistence::DatabaseConnection::open(dbPath);
+        auto dbResult = getDatabase();
         if (!dbResult) {
             fmt::print("Error opening database: {}\n", core::errorMessage(dbResult.error()));
             return;
         }
-
-        auto db = std::shared_ptr<infrastructure::persistence::DatabaseConnection>(std::move(*dbResult));
-        if (auto schemaResult = db->initializeSchema(); !schemaResult) {
-            fmt::print("Error initializing schema: {}\n", core::errorMessage(schemaResult.error()));
-            return;
-        }
+        auto db = *dbResult;
 
         infrastructure::persistence::SqliteAccountRepository accountRepo{db};
         infrastructure::persistence::SqliteTransactionRepository txnRepo{db};
@@ -881,12 +885,14 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
         infrastructure::persistence::SqliteRecurringPatternRepository patternRepo{*dbResult};
         infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
+        infrastructure::persistence::SqliteAccountRepository accountRepo{*dbResult};
 
         auto transactions = txnRepo.findAll();
         auto patterns = patternRepo.findActive();
         auto credits = creditRepo.findAll();
+        auto accounts = accountRepo.findAll();
 
-        if (!transactions || !patterns || !credits) {
+        if (!transactions || !patterns || !credits || !accounts) {
             fmt::print("Error loading data\n");
             return;
         }
@@ -1105,10 +1111,45 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             CYAN, RESET, "AVAILABLE FOR SAVINGS", savingsColor, finalAvailable.toStringDutch(), RESET, CYAN, RESET);
         fmt::print("{}╚══════════════════════════════════════════════════════════════╝{}\n\n", CYAN, RESET);
 
+        // Accounts section
+        if (!accounts->empty()) {
+            fmt::print("{}🏦 ACCOUNTS{}\n", BOLD, RESET);
+            int64_t totalAccountsCents = 0;
+            for (const auto& account : *accounts) {
+                std::string name = account.name();
+                if (name.size() > 26) name = name.substr(0, 23) + "...";
+
+                std::string typeStr;
+                switch (account.type()) {
+                    case core::AccountType::Checking: typeStr = "Checking"; break;
+                    case core::AccountType::Savings: typeStr = "Savings"; break;
+                    case core::AccountType::Investment: typeStr = "Investment"; break;
+                    case core::AccountType::CreditCard: typeStr = "Credit Card"; break;
+                }
+
+                auto balanceColor = account.balance().isNegative() ? RED : GREEN;
+                fmt::print("  {}{:<26}{} {}{:>14}{}  {}{}{}\n",
+                    DIM, name, RESET,
+                    balanceColor, account.balance().toStringDutch(), RESET,
+                    DIM, typeStr, RESET);
+                totalAccountsCents += account.balance().cents();
+            }
+            fmt::print("  {}──────────────────────────{} {}──────────────{}\n", DIM, RESET, DIM, RESET);
+            auto totalAccounts = core::Money{totalAccountsCents, core::Currency::EUR};
+            auto totalColor = totalAccounts.isNegative() ? RED : GREEN;
+            fmt::print("  {}{:<26}{} {}{:>14}{}\n\n", BOLD, "Total", RESET, totalColor, totalAccounts.toStringDutch(), RESET);
+        }
+
         // Calculate and display recommendations
         if (!credits->empty()) {
-            // TODO: Let user configure current emergency fund
-            core::Money currentEmergencyFund{0, core::Currency::EUR};
+            // Use savings accounts as emergency fund
+            int64_t savingsCents = 0;
+            for (const auto& account : *accounts) {
+                if (account.type() == core::AccountType::Savings) {
+                    savingsCents += account.balance().cents();
+                }
+            }
+            core::Money currentEmergencyFund{savingsCents, core::Currency::EUR};
             auto recommendation = budgetService.calculateRecommendation(current, *credits, currentEmergencyFund, core::today());
 
             // Calculate allocations using correct available amount (after budget)
@@ -1202,8 +1243,8 @@ auto CliApp::run(int argc, char* argv[]) -> int {
 
             // Emergency fund status
             if (!recommendation.emergencyFundComplete) {
-                fmt::print("{}⚠️  Emergency fund not complete. Target: {} (3 months expenses){}\n",
-                    YELLOW, recommendation.targetEmergencyFund.toStringDutch(), RESET);
+                fmt::print("{}⚠️  Emergency fund not complete. Current: {} / Target: {} (3 months expenses){}\n",
+                    YELLOW, currentEmergencyFund.toStringDutch(), recommendation.targetEmergencyFund.toStringDutch(), RESET);
                 fmt::print("{}   Currently splitting available funds: 50% debt, 50% savings{}\n\n", DIM, RESET);
             }
         }
@@ -1523,20 +1564,21 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         }
 
         // Get editor from environment
-        auto editor = std::getenv("EDITOR");
-        if (!editor) {
-            editor = std::getenv("VISUAL");
-        }
-        if (!editor) {
+        std::string editorCmd;
+        if (auto* editor = std::getenv("EDITOR")) {
+            editorCmd = editor;
+        } else if (auto* visual = std::getenv("VISUAL")) {
+            editorCmd = visual;
+        } else {
             // Default editors
 #ifdef __APPLE__
-            editor = const_cast<char*>("open -e");
+            editorCmd = "open -e";
 #else
-            editor = const_cast<char*>("nano");
+            editorCmd = "nano";
 #endif
         }
 
-        auto cmd = fmt::format("{} \"{}\"", editor, path.string());
+        auto cmd = fmt::format("{} \"{}\"", editorCmd, path.string());
         [[maybe_unused]] auto result = std::system(cmd.c_str());
     });
 

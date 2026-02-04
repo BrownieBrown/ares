@@ -113,7 +113,6 @@ target_link_libraries(ares_core
 # ============================================================
 add_library(ares_infrastructure STATIC
     src/infrastructure/import/CsvParser.cpp
-    src/infrastructure/import/IngCsvImporter.cpp
     src/infrastructure/import/IngDeCsvImporter.cpp
     src/infrastructure/config/ConfigParser.cpp
     src/infrastructure/persistence/DatabaseConnection.cpp

@@ -1,15 +1,43 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <cstdlib>
 #include "infrastructure/import/IngDeCsvImporter.hpp"
 
 using namespace ares::infrastructure::import;
 using namespace ares::core;
 
-TEST_CASE("ING Germany CSV Importer - Real file", "[Import][IngDe]") {
+namespace {
+// Helper to get test data directory from environment or relative path
+auto getTestDataPath(const std::string& filename) -> std::filesystem::path {
+    // Try environment variable first
+    if (auto* dataDir = std::getenv("ARES_TEST_DATA_DIR")) {
+        return std::filesystem::path{dataDir} / filename;
+    }
+    // Try relative paths from common build locations
+    std::vector<std::filesystem::path> searchPaths = {
+        std::filesystem::path{"data"} / filename,                    // From project root
+        std::filesystem::path{"../data"} / filename,                 // From build dir
+        std::filesystem::path{"../../data"} / filename,              // From nested build dir
+    };
+    for (const auto& path : searchPaths) {
+        if (std::filesystem::exists(path)) {
+            return path;
+        }
+    }
+    return {};  // Not found
+}
+}
+
+TEST_CASE("ING Germany CSV Importer - Real file", "[Import][IngDe][.integration]") {
     IngDeCsvImporter importer;
 
     SECTION("Parse real ING Germany export") {
-        auto result = importer.import(std::filesystem::path{"/Users/marco/dev/ares/data/Umsatzanzeige_DE75500105175426383806_20260122.csv"});
+        auto testFile = getTestDataPath("Umsatzanzeige_DE75500105175426383806_20260122.csv");
+        if (testFile.empty() || !std::filesystem::exists(testFile)) {
+            SKIP("Test data file not found - set ARES_TEST_DATA_DIR or run from project root");
+        }
+
+        auto result = importer.import(testFile);
 
         REQUIRE(result.has_value());
 

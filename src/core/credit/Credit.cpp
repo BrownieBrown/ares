@@ -27,7 +27,7 @@ auto Credit::amountPaidOff() const -> Money {
 
 auto Credit::percentagePaidOff() const -> double {
     if (originalAmount_.cents() == 0) {
-        return 100.0;
+        return 0.0;  // No original amount means nothing to pay off
     }
     return (static_cast<double>(amountPaidOff().cents()) /
             static_cast<double>(originalAmount_.cents())) * 100.0;
