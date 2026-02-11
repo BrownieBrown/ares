@@ -52,7 +52,7 @@ auto ConfigParser::parse(std::string_view content)
 
     while (std::getline(stream, line)) {
         ++lineNumber;
-        auto result = parseLine(line, lineNumber, config);
+        auto result = parseLine(line, line, lineNumber, config);
         if (!result) {
             return std::unexpected(result.error());
         }
@@ -61,7 +61,7 @@ auto ConfigParser::parse(std::string_view content)
     return config;
 }
 
-auto ConfigParser::parseLine(std::string_view line, int lineNumber, UserConfig& config)
+auto ConfigParser::parseLine(std::string_view line, std::string_view rawLine, int lineNumber, UserConfig& config)
     -> std::expected<void, core::ParseError>
 {
     std::string trimmedLine = trim(line);
@@ -76,54 +76,61 @@ auto ConfigParser::parseLine(std::string_view line, int lineNumber, UserConfig& 
     if (firstSpace == std::string::npos) {
         return std::unexpected(core::ParseError{
             .message = "Invalid line format - expected command followed by arguments",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
     std::string command = toLower(trimmedLine.substr(0, firstSpace));
     std::string_view rest = std::string_view{trimmedLine}.substr(firstSpace + 1);
 
-    if (command == "categorize") {
-        auto result = parseCategorizeLine(rest, lineNumber);
+    if (command == "import-format") {
+        auto result = parseImportFormatLine(rest, rawLine, lineNumber);
+        if (!result) return std::unexpected(result.error());
+        config.importFormats.push_back(std::move(*result));
+    }
+    else if (command == "categorize") {
+        auto result = parseCategorizeLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.categorizationRules.push_back(std::move(*result));
     }
     else if (command == "income") {
-        auto result = parseIncomeLine(rest, lineNumber);
+        auto result = parseIncomeLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.income.push_back(std::move(*result));
     }
     else if (command == "expense") {
-        auto result = parseExpenseLine(rest, lineNumber);
+        auto result = parseExpenseLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.expenses.push_back(std::move(*result));
     }
     else if (command == "credit") {
-        auto result = parseCreditLine(rest, lineNumber);
+        auto result = parseCreditLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.credits.push_back(std::move(*result));
     }
     else if (command == "account") {
-        auto result = parseAccountLine(rest, lineNumber);
+        auto result = parseAccountLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.accounts.push_back(std::move(*result));
     }
     else if (command == "budget") {
-        auto result = parseBudgetLine(rest, lineNumber);
+        auto result = parseBudgetLine(rest, rawLine, lineNumber);
         if (!result) return std::unexpected(result.error());
         config.budgets.push_back(std::move(*result));
     }
     else {
         return std::unexpected(core::ParseError{
-            .message = fmt::format("Unknown command: '{}'", command),
-            .line = lineNumber
+            .message = fmt::format("Unknown command: '{}'. Valid commands: import-format, categorize, income, expense, credit, account, budget", command),
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
     return {};
 }
 
-auto ConfigParser::parseCategorizeLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseCategorizeLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<CategorizationRule, core::ParseError>
 {
     // Format: <pattern> as <category>
@@ -131,7 +138,8 @@ auto ConfigParser::parseCategorizeLine(std::string_view line, int lineNumber)
     if (tokens.size() < 3) {
         return std::unexpected(core::ParseError{
             .message = "categorize requires: <pattern> as <category>",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -147,7 +155,8 @@ auto ConfigParser::parseCategorizeLine(std::string_view line, int lineNumber)
     if (asIndex == 0 || asIndex >= tokens.size() - 1) {
         return std::unexpected(core::ParseError{
             .message = "categorize requires: <pattern> as <category>",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -162,9 +171,15 @@ auto ConfigParser::parseCategorizeLine(std::string_view line, int lineNumber)
     std::string categoryStr = toLower(tokens[asIndex + 1]);
     auto category = parseCategory(categoryStr);
     if (!category) {
+        auto suggestion = suggestCategory(categoryStr);
+        auto msg = fmt::format("Unknown category: '{}'", categoryStr);
+        if (!suggestion.empty()) {
+            msg += fmt::format(". Did you mean '{}'?", suggestion);
+        }
         return std::unexpected(core::ParseError{
-            .message = fmt::format("Unknown category: '{}'", categoryStr),
-            .line = lineNumber
+            .message = std::move(msg),
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -174,7 +189,7 @@ auto ConfigParser::parseCategorizeLine(std::string_view line, int lineNumber)
     };
 }
 
-auto ConfigParser::parseIncomeLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseIncomeLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<ConfiguredIncome, core::ParseError>
 {
     // Format: "Name" <amount> <frequency> [category]
@@ -182,7 +197,8 @@ auto ConfigParser::parseIncomeLine(std::string_view line, int lineNumber)
     if (tokens.size() < 3) {
         return std::unexpected(core::ParseError{
             .message = "income requires: \"name\" <amount> <frequency> [category]",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -191,7 +207,8 @@ auto ConfigParser::parseIncomeLine(std::string_view line, int lineNumber)
     if (!amount) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid amount: '{}'", tokens[1]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -199,7 +216,8 @@ auto ConfigParser::parseIncomeLine(std::string_view line, int lineNumber)
     if (!frequency) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid frequency: '{}' (use weekly, biweekly, monthly, quarterly, annual)", tokens[2]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -216,7 +234,7 @@ auto ConfigParser::parseIncomeLine(std::string_view line, int lineNumber)
     };
 }
 
-auto ConfigParser::parseExpenseLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseExpenseLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<ConfiguredExpense, core::ParseError>
 {
     // Format: "Name" <amount> <frequency> [category]
@@ -224,7 +242,8 @@ auto ConfigParser::parseExpenseLine(std::string_view line, int lineNumber)
     if (tokens.size() < 3) {
         return std::unexpected(core::ParseError{
             .message = "expense requires: \"name\" <amount> <frequency> [category]",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -233,7 +252,8 @@ auto ConfigParser::parseExpenseLine(std::string_view line, int lineNumber)
     if (!amount) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid amount: '{}'", tokens[1]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -241,7 +261,8 @@ auto ConfigParser::parseExpenseLine(std::string_view line, int lineNumber)
     if (!frequency) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid frequency: '{}' (use weekly, biweekly, monthly, quarterly, annual)", tokens[2]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -258,7 +279,7 @@ auto ConfigParser::parseExpenseLine(std::string_view line, int lineNumber)
     };
 }
 
-auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseCreditLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<ConfiguredCredit, core::ParseError>
 {
     // Format: "Name" <type> <balance> <rate> <min-payment> [original-amount]
@@ -266,7 +287,8 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     if (tokens.size() < 5) {
         return std::unexpected(core::ParseError{
             .message = "credit requires: \"name\" <type> <balance> <rate> <min-payment> [original-amount]",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -276,7 +298,8 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     if (!type) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid credit type: '{}' (use student-loan, personal-loan, line-of-credit, credit-card, mortgage, car-loan, other)", tokens[1]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -284,7 +307,8 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     if (!balance) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid balance: '{}'", tokens[2]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -294,7 +318,8 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     } catch (...) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid interest rate: '{}'", tokens[3]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -302,7 +327,8 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     if (!minPayment) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid minimum payment: '{}'", tokens[4]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -321,7 +347,7 @@ auto ConfigParser::parseCreditLine(std::string_view line, int lineNumber)
     };
 }
 
-auto ConfigParser::parseAccountLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseAccountLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<ConfiguredAccount, core::ParseError>
 {
     // Format: "Name" <type> <bank> [balance]
@@ -329,7 +355,8 @@ auto ConfigParser::parseAccountLine(std::string_view line, int lineNumber)
     if (tokens.size() < 3) {
         return std::unexpected(core::ParseError{
             .message = "account requires: \"name\" <type> <bank> [balance]",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -339,7 +366,8 @@ auto ConfigParser::parseAccountLine(std::string_view line, int lineNumber)
     if (!type) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid account type: '{}' (use checking, savings, investment, credit-card)", tokens[1]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -347,7 +375,8 @@ auto ConfigParser::parseAccountLine(std::string_view line, int lineNumber)
     if (!bank) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid bank: '{}' (use ing, trade-republic, consorsbank, etc.)", tokens[2]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -364,7 +393,7 @@ auto ConfigParser::parseAccountLine(std::string_view line, int lineNumber)
     };
 }
 
-auto ConfigParser::parseBudgetLine(std::string_view line, int lineNumber)
+auto ConfigParser::parseBudgetLine(std::string_view line, std::string_view rawLine, int lineNumber)
     -> std::expected<CategoryBudget, core::ParseError>
 {
     // Format: <category> <amount>
@@ -372,15 +401,22 @@ auto ConfigParser::parseBudgetLine(std::string_view line, int lineNumber)
     if (tokens.size() < 2) {
         return std::unexpected(core::ParseError{
             .message = "budget requires: <category> <amount>",
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
     auto category = parseCategory(tokens[0]);
     if (!category) {
+        auto suggestion = suggestCategory(tokens[0]);
+        auto msg = fmt::format("Invalid category: '{}'", tokens[0]);
+        if (!suggestion.empty()) {
+            msg += fmt::format(". Did you mean '{}'?", suggestion);
+        }
         return std::unexpected(core::ParseError{
-            .message = fmt::format("Invalid category: '{}'", tokens[0]),
-            .line = lineNumber
+            .message = std::move(msg),
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -388,7 +424,8 @@ auto ConfigParser::parseBudgetLine(std::string_view line, int lineNumber)
     if (!amount) {
         return std::unexpected(core::ParseError{
             .message = fmt::format("Invalid amount: '{}'", tokens[1]),
-            .line = lineNumber
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
         });
     }
 
@@ -396,6 +433,112 @@ auto ConfigParser::parseBudgetLine(std::string_view line, int lineNumber)
         .category = *category,
         .limit = *amount
     };
+}
+
+auto ConfigParser::parseImportFormatLine(std::string_view line, std::string_view rawLine, int lineNumber)
+    -> std::expected<ConfiguredImportFormat, core::ParseError>
+{
+    // Format: "Name" key=value key=value ...
+    // e.g.: "ABN AMRO" separator=; date-col=0 amount-col=6 description-col=7
+    //        counterparty-col=1 date-format=dd-mm-yyyy amount-format=european skip-rows=1
+    auto tokens = tokenize(line);
+    if (tokens.empty()) {
+        return std::unexpected(core::ParseError{
+            .message = "import-format requires: \"name\" [key=value ...]",
+            .line = lineNumber,
+            .sourceLine = std::string{rawLine}
+        });
+    }
+
+    ConfiguredImportFormat format;
+    format.name = tokens[0];
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        auto eqPos = tokens[i].find('=');
+        if (eqPos == std::string::npos) {
+            return std::unexpected(core::ParseError{
+                .message = fmt::format("Invalid key=value pair: '{}'", tokens[i]),
+                .line = lineNumber,
+                .sourceLine = std::string{rawLine}
+            });
+        }
+
+        auto key = toLower(tokens[i].substr(0, eqPos));
+        auto value = tokens[i].substr(eqPos + 1);
+
+        if (key == "separator") {
+            if (value == "\\t" || value == "tab") {
+                format.separator = '\t';
+            } else if (!value.empty()) {
+                format.separator = value[0];
+            }
+        } else if (key == "date-col") {
+            try { format.dateCol = std::stoi(value); }
+            catch (...) {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid date-col value: '{}'", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+        } else if (key == "amount-col") {
+            try { format.amountCol = std::stoi(value); }
+            catch (...) {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid amount-col value: '{}'", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+        } else if (key == "description-col") {
+            try { format.descriptionCol = std::stoi(value); }
+            catch (...) {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid description-col value: '{}'", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+        } else if (key == "counterparty-col") {
+            try { format.counterpartyCol = std::stoi(value); }
+            catch (...) {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid counterparty-col value: '{}'", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+        } else if (key == "date-format") {
+            format.dateFormat = toLower(value);
+        } else if (key == "amount-format") {
+            auto lowerVal = toLower(value);
+            if (lowerVal != "standard" && lowerVal != "european") {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid amount-format: '{}' (use 'standard' or 'european')", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+            format.amountFormat = lowerVal;
+        } else if (key == "skip-rows") {
+            try { format.skipRows = std::stoi(value); }
+            catch (...) {
+                return std::unexpected(core::ParseError{
+                    .message = fmt::format("Invalid skip-rows value: '{}'", value),
+                    .line = lineNumber,
+                    .sourceLine = std::string{rawLine}
+                });
+            }
+        } else {
+            return std::unexpected(core::ParseError{
+                .message = fmt::format("Unknown import-format key: '{}'. Valid keys: separator, date-col, amount-col, description-col, counterparty-col, date-format, amount-format, skip-rows", key),
+                .line = lineNumber,
+                .sourceLine = std::string{rawLine}
+            });
+        }
+    }
+
+    return format;
 }
 
 auto ConfigParser::parseFrequency(std::string_view str)
@@ -645,6 +788,49 @@ auto ConfigParser::matchCategory(
     }
 
     return std::nullopt;
+}
+
+auto ConfigParser::suggestCategory(std::string_view input)
+    -> std::string
+{
+    static const std::vector<std::string> knownCategories = {
+        "salary", "freelance", "investment", "gift", "refund",
+        "housing", "rent", "utilities", "groceries", "transportation",
+        "healthcare", "insurance", "entertainment", "cinema", "shopping",
+        "restaurants", "subscriptions", "education", "travel", "personal-care",
+        "atm", "cash", "savings", "internal", "debt", "loan", "fee", "other"
+    };
+
+    std::string lower{input};
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    // Simple substring-based suggestion: find categories that share a prefix or are substrings
+    std::string bestMatch;
+    size_t bestScore = 0;
+
+    for (const auto& cat : knownCategories) {
+        // Check common prefix length
+        size_t prefixLen = 0;
+        size_t maxLen = std::min(lower.size(), cat.size());
+        while (prefixLen < maxLen && lower[prefixLen] == cat[prefixLen]) {
+            ++prefixLen;
+        }
+
+        // Need at least 3 chars matching to suggest
+        if (prefixLen >= 3 && prefixLen > bestScore) {
+            bestScore = prefixLen;
+            bestMatch = cat;
+        }
+
+        // Also check if input is a substring of category or vice versa
+        if (lower.size() >= 3 && cat.find(lower) != std::string::npos && cat.size() > bestScore) {
+            bestScore = cat.size();
+            bestMatch = cat;
+        }
+    }
+
+    return bestMatch;
 }
 
 } // namespace ares::infrastructure::config

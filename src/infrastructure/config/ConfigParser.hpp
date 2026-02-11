@@ -54,6 +54,18 @@ struct CategoryBudget {
     core::Money limit;
 };
 
+struct ConfiguredImportFormat {
+    std::string name;
+    char separator{','};
+    int dateCol{0};
+    int amountCol{1};
+    int descriptionCol{-1};  // -1 = not present
+    int counterpartyCol{-1};
+    std::string dateFormat{"yyyy-mm-dd"};  // dd.mm.yyyy, dd-mm-yyyy, yyyy-mm-dd, mm/dd/yyyy, dd/mm/yyyy
+    std::string amountFormat{"standard"};  // "standard" (1234.56) or "european" (1.234,56)
+    int skipRows{0};
+};
+
 struct UserConfig {
     std::vector<CategorizationRule> categorizationRules;
     std::vector<ConfiguredIncome> income;
@@ -61,11 +73,12 @@ struct UserConfig {
     std::vector<ConfiguredCredit> credits;
     std::vector<ConfiguredAccount> accounts;
     std::vector<CategoryBudget> budgets;
+    std::vector<ConfiguredImportFormat> importFormats;
 
     [[nodiscard]] auto isEmpty() const -> bool {
         return categorizationRules.empty() && income.empty() &&
                expenses.empty() && credits.empty() && accounts.empty() &&
-               budgets.empty();
+               budgets.empty() && importFormats.empty();
     }
 
     [[nodiscard]] auto getBudget(core::TransactionCategory cat) const
@@ -96,26 +109,29 @@ public:
         -> std::optional<core::TransactionCategory>;
 
 private:
-    auto parseLine(std::string_view line, int lineNumber, UserConfig& config)
+    auto parseLine(std::string_view line, std::string_view rawLine, int lineNumber, UserConfig& config)
         -> std::expected<void, core::ParseError>;
 
-    [[nodiscard]] auto parseCategorizeLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseCategorizeLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<CategorizationRule, core::ParseError>;
 
-    [[nodiscard]] auto parseIncomeLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseIncomeLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<ConfiguredIncome, core::ParseError>;
 
-    [[nodiscard]] auto parseExpenseLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseExpenseLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<ConfiguredExpense, core::ParseError>;
 
-    [[nodiscard]] auto parseCreditLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseCreditLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<ConfiguredCredit, core::ParseError>;
 
-    [[nodiscard]] auto parseAccountLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseAccountLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<ConfiguredAccount, core::ParseError>;
 
-    [[nodiscard]] auto parseBudgetLine(std::string_view line, int lineNumber)
+    [[nodiscard]] auto parseBudgetLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<CategoryBudget, core::ParseError>;
+
+    [[nodiscard]] auto parseImportFormatLine(std::string_view line, std::string_view rawLine, int lineNumber)
+        -> std::expected<ConfiguredImportFormat, core::ParseError>;
 
     // Helper functions
     [[nodiscard]] static auto parseFrequency(std::string_view str)
@@ -143,6 +159,10 @@ private:
     // Pattern matching with * wildcard support
     [[nodiscard]] static auto matchesPattern(std::string_view pattern, std::string_view text)
         -> bool;
+
+    // Suggest closest matching category name for typos
+    [[nodiscard]] static auto suggestCategory(std::string_view input)
+        -> std::string;
 };
 
 } // namespace ares::infrastructure::config

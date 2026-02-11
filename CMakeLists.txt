@@ -114,6 +114,7 @@ target_link_libraries(ares_core
 add_library(ares_infrastructure STATIC
     src/infrastructure/import/CsvParser.cpp
     src/infrastructure/import/IngDeCsvImporter.cpp
+    src/infrastructure/import/GenericCsvImporter.cpp
     src/infrastructure/config/ConfigParser.cpp
     src/infrastructure/persistence/DatabaseConnection.cpp
     src/infrastructure/persistence/SqliteTransactionRepository.cpp
@@ -121,6 +122,7 @@ add_library(ares_infrastructure STATIC
     src/infrastructure/persistence/SqliteCreditRepository.cpp
     src/infrastructure/persistence/SqliteRecurringPatternRepository.cpp
     src/infrastructure/persistence/SqliteAdjustmentRepository.cpp
+    src/infrastructure/persistence/MigrationRunner.cpp
     src/infrastructure/persistence/AccountRepository.cpp
     src/infrastructure/persistence/TransactionRepository.cpp
     src/infrastructure/persistence/CreditRepository.cpp
@@ -142,6 +144,11 @@ add_library(ares_application STATIC
     src/application/services/BudgetService.cpp
     src/application/services/RecurrenceDetector.cpp
     src/application/services/ConfigService.cpp
+    src/application/services/BackupService.cpp
+    src/application/services/ExportService.cpp
+    src/application/services/CategoryMatcher.cpp
+    src/application/services/ReportService.cpp
+    src/application/services/DuplicateDetector.cpp
 )
 target_include_directories(ares_application PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ares_application
@@ -181,9 +188,20 @@ if(ARES_BUILD_TESTS)
         tests/unit/core/AccountTests.cpp
         tests/unit/core/TransactionTests.cpp
         tests/unit/infrastructure/IngDeCsvImporterTests.cpp
+        tests/unit/infrastructure/GenericCsvImporterTests.cpp
         tests/unit/infrastructure/ConfigParserTests.cpp
+        tests/unit/infrastructure/MigrationRunnerTests.cpp
         tests/unit/services/RecurrenceDetectorTests.cpp
         tests/unit/services/BudgetServiceTests.cpp
+        tests/unit/services/BackupServiceTests.cpp
+        tests/unit/services/ExportServiceTests.cpp
+        tests/unit/services/CategoryMatcherTests.cpp
+        tests/unit/services/ReportServiceTests.cpp
+        tests/unit/services/DuplicateDetectorTests.cpp
+        tests/unit/services/AccountServiceTests.cpp
+        tests/unit/services/TransactionServiceTests.cpp
+        tests/unit/services/ImportServiceTests.cpp
+        tests/unit/services/CreditServiceTests.cpp
     )
     target_link_libraries(ares_unit_tests
         PRIVATE

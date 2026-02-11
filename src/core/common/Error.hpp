@@ -10,8 +10,12 @@ struct ParseError {
     std::string message;
     int line{0};
     int column{0};
+    std::string sourceLine;
 
     [[nodiscard]] auto what() const -> std::string {
+        if (line > 0 && !sourceLine.empty()) {
+            return fmt::format("Line {}: {}\n  > {}", line, message, sourceLine);
+        }
         if (line > 0) {
             return fmt::format("Parse error at line {}: {}", line, message);
         }

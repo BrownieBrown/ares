@@ -24,7 +24,6 @@ public:
     auto initializeSchema() -> std::expected<void, core::Error>;
 
 private:
-    auto runMigrations() -> std::expected<void, core::Error>;
     DatabaseConnection() = default;
     sqlite3* db_{nullptr};
 };

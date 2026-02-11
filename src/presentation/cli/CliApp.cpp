@@ -5,6 +5,7 @@
 #include <map>
 #include <cstdlib>
 #include "infrastructure/import/IngDeCsvImporter.hpp"
+#include "infrastructure/import/GenericCsvImporter.hpp"
 #include "infrastructure/persistence/DatabaseConnection.hpp"
 #include "infrastructure/persistence/SqliteAccountRepository.hpp"
 #include "infrastructure/persistence/SqliteTransactionRepository.hpp"
@@ -16,6 +17,15 @@
 #include "application/services/RecurrenceDetector.hpp"
 #include "application/services/BudgetService.hpp"
 #include "application/services/ConfigService.hpp"
+#include "application/services/BackupService.hpp"
+#include "application/services/ExportService.hpp"
+#include "application/services/AccountService.hpp"
+#include "application/services/TransactionService.hpp"
+#include "application/services/ImportService.hpp"
+#include "application/services/CategoryMatcher.hpp"
+#include "application/services/CreditService.hpp"
+#include "application/services/DuplicateDetector.hpp"
+#include "application/services/ReportService.hpp"
 #include "core/transaction/Transaction.hpp"
 #include "core/transaction/RecurringPattern.hpp"
 #include "core/account/Account.hpp"
@@ -55,80 +65,9 @@ auto getDatabase() -> std::expected<std::shared_ptr<infrastructure::persistence:
     return db;
 }
 
-auto generateCreditId() -> std::string {
-    static int counter = 0;
-    return fmt::format("credit-{}", ++counter);
-}
-
 auto generateAdjustmentId() -> std::string {
     static int counter = 0;
     return fmt::format("adj-{}", ++counter);
-}
-
-auto generateAccountId() -> std::string {
-    static int counter = 0;
-    return fmt::format("acc-{}", ++counter);
-}
-
-auto generateTransactionId() -> std::string {
-    static int counter = 0;
-    return fmt::format("txn-manual-{}", ++counter);
-}
-
-auto parseAccountType(const std::string& typeStr) -> std::optional<core::AccountType> {
-    if (typeStr == "checking") return core::AccountType::Checking;
-    if (typeStr == "savings") return core::AccountType::Savings;
-    if (typeStr == "investment") return core::AccountType::Investment;
-    if (typeStr == "credit-card" || typeStr == "credit_card") return core::AccountType::CreditCard;
-    return std::nullopt;
-}
-
-auto parseBankIdentifier(const std::string& bankStr) -> core::BankIdentifier {
-    if (bankStr == "ing") return core::BankIdentifier::ING;
-    if (bankStr == "abn" || bankStr == "abn-amro") return core::BankIdentifier::ABN_AMRO;
-    if (bankStr == "rabobank") return core::BankIdentifier::Rabobank;
-    if (bankStr == "bunq") return core::BankIdentifier::Bunq;
-    if (bankStr == "degiro") return core::BankIdentifier::DeGiro;
-    if (bankStr == "trade-republic" || bankStr == "traderepublic") return core::BankIdentifier::TradeRepublic;
-    if (bankStr == "consorsbank") return core::BankIdentifier::Consorsbank;
-    return core::BankIdentifier::Generic;
-}
-
-auto parseTransactionCategory(const std::string& catStr) -> std::optional<core::TransactionCategory> {
-    if (catStr == "salary") return core::TransactionCategory::Salary;
-    if (catStr == "freelance") return core::TransactionCategory::Freelance;
-    if (catStr == "investment") return core::TransactionCategory::Investment;
-    if (catStr == "gift") return core::TransactionCategory::Gift;
-    if (catStr == "refund") return core::TransactionCategory::Refund;
-    if (catStr == "housing") return core::TransactionCategory::Housing;
-    if (catStr == "utilities") return core::TransactionCategory::Utilities;
-    if (catStr == "groceries") return core::TransactionCategory::Groceries;
-    if (catStr == "transportation") return core::TransactionCategory::Transportation;
-    if (catStr == "healthcare") return core::TransactionCategory::Healthcare;
-    if (catStr == "insurance") return core::TransactionCategory::Insurance;
-    if (catStr == "entertainment") return core::TransactionCategory::Entertainment;
-    if (catStr == "shopping") return core::TransactionCategory::Shopping;
-    if (catStr == "restaurants") return core::TransactionCategory::Restaurants;
-    if (catStr == "subscriptions") return core::TransactionCategory::Subscriptions;
-    if (catStr == "education") return core::TransactionCategory::Education;
-    if (catStr == "travel") return core::TransactionCategory::Travel;
-    if (catStr == "personal-care") return core::TransactionCategory::PersonalCare;
-    if (catStr == "savings") return core::TransactionCategory::SavingsTransfer;
-    if (catStr == "debt") return core::TransactionCategory::DebtPayment;
-    if (catStr == "fee") return core::TransactionCategory::Fee;
-    if (catStr == "other") return core::TransactionCategory::Other;
-    return std::nullopt;
-}
-
-auto parseCreditType(const std::string& typeStr) -> std::optional<core::CreditType> {
-    if (typeStr == "student-loan" || typeStr == "student_loan") return core::CreditType::StudentLoan;
-    if (typeStr == "personal-loan" || typeStr == "personal_loan") return core::CreditType::PersonalLoan;
-    if (typeStr == "line-of-credit" || typeStr == "line_of_credit") return core::CreditType::LineOfCredit;
-    if (typeStr == "credit-card" || typeStr == "credit_card") return core::CreditType::CreditCard;
-    if (typeStr == "mortgage") return core::CreditType::Mortgage;
-    if (typeStr == "car-loan" || typeStr == "car_loan") return core::CreditType::CarLoan;
-    if (typeStr == "other") return core::CreditType::Other;
-    return std::nullopt;
 }
 
 auto printTransactionSummary(const infrastructure::import::IngDeImportResult& result) -> void {
@@ -220,79 +159,6 @@ auto printTransactionSummary(const infrastructure::import::IngDeImportResult& re
     fmt::print("═══════════════════════════════════════════════════════════════\n\n");
 }
 
-// Auto-import CSV files from ~/.ares/import/ directory
-auto autoImportCsvFiles(std::shared_ptr<infrastructure::persistence::DatabaseConnection> db) -> int {
-    auto homeDirResult = getHomeDir();
-    if (!homeDirResult) {
-        return 0;  // Can't determine home directory
-    }
-    std::filesystem::path importDir = *homeDirResult / ".ares" / "import";
-
-    if (!std::filesystem::exists(importDir)) {
-        return 0;  // No import directory, nothing to do
-    }
-
-    // Load custom categorization rules from config
-    application::services::ConfigService configService;
-    auto configResult = configService.loadConfig();
-
-    infrastructure::import::IngDeCsvImporter importer;
-    if (configResult && !configResult->categorizationRules.empty()) {
-        importer.setCategorizationRules(configResult->categorizationRules);
-    }
-
-    infrastructure::persistence::SqliteAccountRepository accountRepo{db};
-    infrastructure::persistence::SqliteTransactionRepository txnRepo{db};
-
-    int totalImported = 0;
-
-    for (const auto& entry : std::filesystem::directory_iterator(importDir)) {
-        if (!entry.is_regular_file()) continue;
-
-        auto path = entry.path();
-        auto ext = path.extension().string();
-        // Convert to lowercase for comparison
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        if (ext != ".csv") continue;
-
-        auto result = importer.import(path);
-        if (!result) {
-            fmt::print("Warning: Failed to import {}: {}\n",
-                       path.filename().string(), core::errorMessage(result.error()));
-            continue;
-        }
-
-        // Find or create account
-        core::AccountId accountId{result->iban};
-        auto existingAccount = accountRepo.findByIban(result->iban);
-        if (existingAccount && !existingAccount->has_value()) {
-            core::Account account{
-                accountId,
-                result->accountName,
-                result->iban,
-                core::AccountType::Checking,
-                core::BankIdentifier::ING
-            };
-            account.setBalance(result->currentBalance);
-            (void)accountRepo.save(account);
-        } else if (existingAccount && existingAccount->has_value()) {
-            auto account = **existingAccount;
-            account.setBalance(result->currentBalance);
-            (void)accountRepo.update(account);
-        }
-
-        // Save with duplicate detection
-        auto saveResult = txnRepo.saveBatchSkipDuplicates(result->transactions);
-        if (saveResult && *saveResult > 0) {
-            fmt::print("Auto-imported {} new transactions from {}\n",
-                       *saveResult, path.filename().string());
-            totalImported += *saveResult;
-        }
-    }
-
-    return totalImported;
-}
-
 } // anonymous namespace
 
 auto CliApp::run(int argc, char* argv[]) -> int {
@@ -302,7 +168,9 @@ auto CliApp::run(int argc, char* argv[]) -> int {
     // Import subcommand
     auto* import_cmd = app.add_subcommand("import", "Import transactions from bank CSV");
     std::string import_file;
+    std::string import_format_name;
     import_cmd->add_option("file", import_file, "CSV file to import")->required();
+    import_cmd->add_option("--format,-f", import_format_name, "Import format name from config (auto-detect if not specified)");
     import_cmd->callback([&]() {
         std::filesystem::path filePath{import_file};
 
@@ -312,95 +180,57 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         }
 
         fmt::print("Importing from: {}\n", import_file);
+        if (!import_format_name.empty()) {
+            fmt::print("Using format: {}\n", import_format_name);
+        }
 
-        // Load custom categorization rules from config
+        // Also print the detailed summary using the raw importer (display-only)
+        // Only for ING DE format (when no custom format is specified)
         application::services::ConfigService configService;
         auto configResult = configService.loadConfig();
 
-        // Detect bank format (currently only ING Germany supported)
-        infrastructure::import::IngDeCsvImporter importer;
+        if (import_format_name.empty()) {
+            infrastructure::import::IngDeCsvImporter importer;
+            if (configResult && !configResult->categorizationRules.empty()) {
+                importer.setCategorizationRules(configResult->categorizationRules);
+                fmt::print("Loaded {} custom categorization rules from config.\n",
+                           configResult->categorizationRules.size());
+            }
 
-        // Apply custom categorization rules if config loaded successfully
-        if (configResult && !configResult->categorizationRules.empty()) {
-            importer.setCategorizationRules(configResult->categorizationRules);
+            auto rawResult = importer.import(filePath);
+            if (rawResult) {
+                printTransactionSummary(*rawResult);
+            }
+        } else if (configResult && !configResult->categorizationRules.empty()) {
             fmt::print("Loaded {} custom categorization rules from config.\n",
                        configResult->categorizationRules.size());
         }
 
-        auto result = importer.import(filePath);
-
-        if (!result) {
-            fmt::print("Error: {}\n", core::errorMessage(result.error()));
-            return;
-        }
-
-        printTransactionSummary(*result);
-
-        // Initialize database
         auto dbResult = getDatabase();
         if (!dbResult) {
             fmt::print("Error opening database: {}\n", core::errorMessage(dbResult.error()));
             return;
         }
-        auto db = *dbResult;
 
-        infrastructure::persistence::SqliteAccountRepository accountRepo{db};
-        infrastructure::persistence::SqliteTransactionRepository txnRepo{db};
+        std::optional<std::string> formatOpt;
+        if (!import_format_name.empty()) {
+            formatOpt = import_format_name;
+        }
 
-        // Find or create account
-        auto existingAccount = accountRepo.findByIban(result->iban);
-        if (!existingAccount) {
-            fmt::print("Error checking account: {}\n", core::errorMessage(existingAccount.error()));
+        application::services::ImportService importService;
+        auto result = importService.importFromFile(filePath, *dbResult, formatOpt);
+        if (!result) {
+            fmt::print("Error: {}\n", core::errorMessage(result.error()));
             return;
         }
 
-        core::AccountId accountId{result->iban}; // Use IBAN as ID for simplicity
-        if (!existingAccount->has_value()) {
-            // Create new account
-            core::Account account{
-                accountId,
-                result->accountName,
-                result->iban,
-                core::AccountType::Checking,
-                core::BankIdentifier::ING
-            };
-            account.setBalance(result->currentBalance);
-
-            if (auto saveResult = accountRepo.save(account); !saveResult) {
-                fmt::print("Error saving account: {}\n", core::errorMessage(saveResult.error()));
-                return;
-            }
-            fmt::print("\nCreated account: {} ({})\n", result->accountName, result->iban);
+        if (!result->iban.empty()) {
+            fmt::print("Account: {} ({})\n", result->accountName, result->iban);
         } else {
-            // Update balance
-            auto account = **existingAccount;
-            account.setBalance(result->currentBalance);
-            if (auto updateResult = accountRepo.update(account); !updateResult) {
-                fmt::print("Error updating account: {}\n", core::errorMessage(updateResult.error()));
-                return;
-            }
-            fmt::print("\nUpdated account balance: {}\n", result->currentBalance.toStringDutch());
+            fmt::print("Format: {}\n", result->accountName);
         }
-
-        // Save transactions with duplicate detection
-        fmt::print("Checking {} transactions for duplicates...\n", result->transactions.size());
-        auto saveResult = txnRepo.saveBatchSkipDuplicates(result->transactions);
-        if (!saveResult) {
-            fmt::print("Error saving transactions: {}\n", core::errorMessage(saveResult.error()));
-            return;
-        }
-
-        int newCount = *saveResult;
-        int duplicates = static_cast<int>(result->transactions.size()) - newCount;
-        if (duplicates > 0) {
-            fmt::print("Skipped {} duplicate transactions.\n", duplicates);
-        }
-        fmt::print("Imported {} new transactions.\n", newCount);
-
-        auto countResult = txnRepo.count();
-        if (countResult) {
-            fmt::print("Database now contains {} transactions.\n", *countResult);
-        }
+        fmt::print("Imported {} new transactions ({} duplicates skipped).\n",
+                   result->newTransactions, result->duplicates);
     });
 
     // Accounts subcommand
@@ -468,7 +298,7 @@ auto CliApp::run(int argc, char* argv[]) -> int {
     accounts_add_cmd->add_option("--balance", account_balance, "Initial balance");
 
     accounts_add_cmd->callback([&]() {
-        auto parsedType = parseAccountType(account_type);
+        auto parsedType = application::services::AccountService::parseAccountType(account_type);
         if (!parsedType) {
             fmt::print("Error: Invalid account type '{}'\n", account_type);
             fmt::print("Valid types: checking, savings, investment, credit-card\n");
@@ -487,21 +317,14 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             return;
         }
 
-        auto bankId = parseBankIdentifier(account_bank);
-        auto iban = account_iban.empty() ? generateAccountId() : account_iban;
-
-        core::Account account{
-            core::AccountId{iban},
-            account_name,
-            iban,
-            *parsedType,
-            bankId
-        };
-        account.setBalance(*balanceMoney);
+        auto bankId = application::services::AccountService::parseBankIdentifier(account_bank);
 
         infrastructure::persistence::SqliteAccountRepository accountRepo{*dbResult};
-        if (auto saveResult = accountRepo.save(account); !saveResult) {
-            fmt::print("Error saving account: {}\n", core::errorMessage(saveResult.error()));
+        application::services::AccountService accountService;
+        auto result = accountService.createAccount(
+            account_name, account_iban, *parsedType, bankId, *balanceMoney, accountRepo);
+        if (!result) {
+            fmt::print("Error saving account: {}\n", core::errorMessage(result.error()));
             return;
         }
 
@@ -596,36 +419,24 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
 
         // Find account
-        auto accounts = accountRepo.findAll();
-        if (!accounts) {
+        application::services::AccountService accountService;
+        auto accountOpt = accountService.findByNameOrIban(txn_account, accountRepo);
+        if (!accountOpt) {
             fmt::print("Error loading accounts\n");
             return;
         }
-
-        core::AccountId accountId{"unknown"};
-        for (const auto& acc : *accounts) {
-            if (acc.name() == txn_account || acc.iban() == txn_account) {
-                accountId = acc.id();
-                break;
-            }
-        }
-
-        if (accountId.value == "unknown") {
+        if (!accountOpt->has_value()) {
             fmt::print("Account '{}' not found\n", txn_account);
             return;
         }
+        auto accountId = (*accountOpt)->id();
 
         // Parse date
-        int year, month, day;
-        if (std::sscanf(txn_date.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
+        auto dateResult = application::services::TransactionService::parseDate(txn_date);
+        if (!dateResult) {
             fmt::print("Invalid date format. Use YYYY-MM-DD\n");
             return;
         }
-        core::Date date{
-            std::chrono::year{year},
-            std::chrono::month{static_cast<unsigned>(month)},
-            std::chrono::day{static_cast<unsigned>(day)}
-        };
 
         auto amountMoney = core::Money::fromDouble(txn_amount, core::Currency::EUR);
         if (!amountMoney) {
@@ -637,32 +448,26 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         if (txn_type == "income") type = core::TransactionType::Income;
         else if (txn_type == "expense") type = core::TransactionType::Expense;
 
-        core::Transaction txn{
-            core::TransactionId{generateTransactionId()},
-            accountId,
-            date,
-            *amountMoney,
-            type
-        };
-
+        std::optional<core::TransactionCategory> cat;
         if (!txn_category.empty()) {
-            auto cat = parseTransactionCategory(txn_category);
-            if (cat) {
-                txn.setCategory(*cat);
-            }
+            cat = application::services::TransactionService::parseTransactionCategory(txn_category);
         }
 
+        std::optional<std::string> desc;
         if (!txn_description.empty()) {
-            txn.setDescription(txn_description);
+            desc = txn_description;
         }
 
-        if (auto result = txnRepo.save(txn); !result) {
+        application::services::TransactionService txnService;
+        auto result = txnService.createTransaction(
+            accountId, *dateResult, *amountMoney, type, cat, desc, txnRepo);
+        if (!result) {
             fmt::print("Error saving transaction: {}\n", core::errorMessage(result.error()));
             return;
         }
 
         fmt::print("Added transaction: {} on {} ({})\n",
-                   amountMoney->toStringDutch(), txn_date, core::categoryName(txn.category()));
+                   amountMoney->toStringDutch(), txn_date, core::categoryName(result->category()));
     });
 
     transactions_cmd->callback([&]() {
@@ -748,7 +553,7 @@ auto CliApp::run(int argc, char* argv[]) -> int {
     credits_add_cmd->add_option("--min-payment,-m", credit_min_payment, "Minimum monthly payment");
 
     credits_add_cmd->callback([&]() {
-        auto parsedType = parseCreditType(credit_type);
+        auto parsedType = application::services::CreditService::parseCreditType(credit_type);
         if (!parsedType) {
             fmt::print("Error: Invalid credit type '{}'\n", credit_type);
             fmt::print("Valid types: student-loan, personal-loan, line-of-credit, credit-card, mortgage, car-loan, other\n");
@@ -775,27 +580,16 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             return;
         }
 
-        core::Credit credit{
-            core::CreditId{generateCreditId()},
-            credit_name,
-            *parsedType,
-            *originalMoney,
-            *balanceMoney,
-            credit_rate / 100.0,  // Convert percentage to decimal
-            core::InterestType::Fixed
-        };
-
-        if (!credit_lender.empty()) {
-            credit.setLender(credit_lender);
-        }
-
-        if (minPaymentMoney) {
-            credit.setMinimumPayment(*minPaymentMoney);
-        }
-
         infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
-        if (auto saveResult = creditRepo.save(credit); !saveResult) {
-            fmt::print("Error saving credit: {}\n", core::errorMessage(saveResult.error()));
+        application::services::CreditService creditService;
+        auto result = creditService.createCredit(
+            credit_name, *parsedType, *originalMoney, *balanceMoney,
+            credit_rate / 100.0, core::InterestType::Fixed,
+            minPaymentMoney ? *minPaymentMoney : core::Money{0, core::Currency::EUR},
+            credit_lender.empty() ? std::nullopt : std::optional{credit_lender},
+            creditRepo);
+        if (!result) {
+            fmt::print("Error saving credit: {}\n", core::errorMessage(result.error()));
             return;
         }
 
@@ -818,49 +612,37 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             return;
         }
 
-        infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
-
-        // Find credit by ID or name
-        auto credits = creditRepo.findAll();
-        if (!credits) {
-            fmt::print("Error loading credits: {}\n", core::errorMessage(credits.error()));
-            return;
-        }
-
-        core::Credit* foundCredit = nullptr;
-        for (auto& credit : *credits) {
-            if (credit.id().value == payment_credit_id || credit.name() == payment_credit_id) {
-                foundCredit = &credit;
-                break;
-            }
-        }
-
-        if (!foundCredit) {
-            fmt::print("Error: Credit '{}' not found\n", payment_credit_id);
-            return;
-        }
-
         auto paymentMoney = core::Money::fromDouble(payment_amount, core::Currency::EUR);
         if (!paymentMoney) {
             fmt::print("Error: Invalid payment amount\n");
             return;
         }
 
-        auto oldBalance = foundCredit->currentBalance();
-        if (auto result = foundCredit->recordPayment(*paymentMoney); !result) {
+        infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
+
+        // Get old balance for display before recording payment
+        application::services::CreditService creditService;
+        auto found = creditService.findByIdOrName(payment_credit_id, creditRepo);
+        if (!found) {
+            fmt::print("Error loading credits: {}\n", core::errorMessage(found.error()));
+            return;
+        }
+        if (!found->has_value()) {
+            fmt::print("Error: Credit '{}' not found\n", payment_credit_id);
+            return;
+        }
+        auto oldBalance = (*found)->currentBalance();
+
+        auto result = creditService.recordPayment(payment_credit_id, *paymentMoney, creditRepo);
+        if (!result) {
             fmt::print("Error recording payment: {}\n", core::errorMessage(result.error()));
             return;
         }
 
-        if (auto updateResult = creditRepo.update(*foundCredit); !updateResult) {
-            fmt::print("Error saving credit: {}\n", core::errorMessage(updateResult.error()));
-            return;
-        }
-
-        fmt::print("Payment recorded for {}:\n", foundCredit->name());
+        fmt::print("Payment recorded for {}:\n", result->name());
         fmt::print("  Previous balance: {}\n", oldBalance.toStringDutch());
         fmt::print("  Payment:          {}\n", paymentMoney->toStringDutch());
-        fmt::print("  New balance:      {}\n", foundCredit->currentBalance().toStringDutch());
+        fmt::print("  New balance:      {}\n", result->currentBalance().toStringDutch());
     });
 
     credits_cmd->callback([&]() {
@@ -880,7 +662,8 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         }
 
         // Auto-import CSV files from ~/.ares/import/ directory
-        autoImportCsvFiles(*dbResult);
+        application::services::ImportService importService;
+        (void)importService.autoImportFromDirectory(*dbResult);
 
         infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
         infrastructure::persistence::SqliteRecurringPatternRepository patternRepo{*dbResult};
@@ -1412,6 +1195,76 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         }
     });
 
+    // Categorize subcommand
+    auto* categorize_cmd = app.add_subcommand("categorize", "Re-categorize transactions");
+
+    auto* categorize_show = categorize_cmd->add_subcommand("show", "Show categorization rules");
+    categorize_show->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+
+        fmt::print("\nCATEGORIZATION RULES\n");
+        fmt::print("────────────────────────────────────────────\n\n");
+
+        if (configResult && !configResult->categorizationRules.empty()) {
+            fmt::print("Custom Rules:\n");
+            for (const auto& rule : configResult->categorizationRules) {
+                fmt::print("  {:<30} -> {}\n", rule.pattern, core::categoryName(rule.category));
+            }
+        } else {
+            fmt::print("No custom rules configured.\n");
+            fmt::print("Add rules in config: categorize <pattern> as <category>\n");
+        }
+        fmt::print("\nBuilt-in rules are always active for German banks.\n");
+    });
+
+    categorize_cmd->callback([&]() {
+        if (categorize_cmd->get_subcommands().empty()) {
+            auto dbResult = getDatabase();
+            if (!dbResult) {
+                fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+                return;
+            }
+
+            infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+            auto transactions = txnRepo.findAll();
+            if (!transactions) {
+                fmt::print("Error: {}\n", core::errorMessage(transactions.error()));
+                return;
+            }
+
+            application::services::ConfigService configService;
+            auto configResult = configService.loadConfig();
+
+            application::services::CategoryMatcher matcher;
+            if (configResult && !configResult->categorizationRules.empty()) {
+                matcher.setCustomRules(configResult->categorizationRules);
+            }
+
+            int changed = 0;
+            for (auto& txn : *transactions) {
+                auto result = matcher.categorize(
+                    txn.counterpartyName().value_or(""),
+                    txn.description());
+                if (result.category != txn.category()) {
+                    txn.setCategory(result.category);
+                    (void)txnRepo.update(txn);
+                    ++changed;
+                }
+            }
+
+            fmt::print("Re-categorized {} transactions.\n", changed);
+
+            auto stats = matcher.getRuleStats();
+            if (!stats.empty()) {
+                fmt::print("\nCustom rule hits:\n");
+                for (const auto& [rule, hits] : stats) {
+                    fmt::print("  {:<30} {} matches\n", rule, hits);
+                }
+            }
+        }
+    });
+
     // Config subcommand
     auto* config_cmd = app.add_subcommand("config", "Manage user configuration");
 
@@ -1596,6 +1449,323 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         }
     });
 
+    // Export subcommand
+    auto* export_cmd = app.add_subcommand("export", "Export transactions");
+    std::string export_format;
+    std::string export_from;
+    std::string export_to;
+    std::string export_output;
+    std::string export_category;
+
+    export_cmd->add_option("format", export_format, "Format: csv or json")->required();
+    export_cmd->add_option("--from,-f", export_from, "Start date (YYYY-MM-DD)");
+    export_cmd->add_option("--to,-t", export_to, "End date (YYYY-MM-DD)");
+    export_cmd->add_option("--output,-o", export_output, "Output file path")->required();
+    export_cmd->add_option("--category,-c", export_category, "Filter by category");
+
+    export_cmd->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto transactions = txnRepo.findAll();
+        if (!transactions) {
+            fmt::print("Error: {}\n", core::errorMessage(transactions.error()));
+            return;
+        }
+
+        application::services::ExportFilter filter;
+        // Parse from/to dates if provided
+        if (!export_from.empty()) {
+            auto dateResult = application::services::TransactionService::parseDate(export_from);
+            if (dateResult) filter.fromDate = *dateResult;
+        }
+        if (!export_to.empty()) {
+            auto dateResult = application::services::TransactionService::parseDate(export_to);
+            if (dateResult) filter.toDate = *dateResult;
+        }
+        if (!export_category.empty()) {
+            filter.category = application::services::TransactionService::parseTransactionCategory(export_category);
+        }
+
+        application::services::ExportService exportService;
+        auto filtered = exportService.filterTransactions(*transactions, filter);
+
+        std::expected<void, core::Error> result;
+        if (export_format == "csv") {
+            result = exportService.exportCsv(filtered, export_output);
+        } else if (export_format == "json") {
+            result = exportService.exportJson(filtered, export_output);
+        } else {
+            fmt::print("Unknown format: {}. Use 'csv' or 'json'.\n", export_format);
+            return;
+        }
+
+        if (!result) {
+            fmt::print("Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+
+        fmt::print("Exported {} transactions to {}\n", filtered.size(), export_output);
+    });
+
+    // Backup subcommand
+    auto* backup_cmd = app.add_subcommand("backup", "Backup and restore database");
+    backup_cmd->require_subcommand();
+
+    auto* backup_create = backup_cmd->add_subcommand("create", "Create a database backup");
+    backup_create->callback([&]() {
+        application::services::BackupService backupService;
+        auto result = backupService.createBackup();
+        if (!result) {
+            fmt::print(stderr, "Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+        fmt::print("Backup created: {}\n", result->path.string());
+        fmt::print("Size: {} bytes\n", result->sizeBytes);
+    });
+
+    auto* backup_list = backup_cmd->add_subcommand("list", "List available backups");
+    backup_list->callback([&]() {
+        application::services::BackupService backupService;
+        auto result = backupService.listBackups();
+        if (!result) {
+            fmt::print(stderr, "Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+        if (result->empty()) {
+            fmt::print("No backups found.\n");
+            return;
+        }
+        fmt::print("{:<40} {:>12}\n", "Filename", "Size");
+        fmt::print("{}\n", std::string(54, '-'));
+        for (const auto& backup : *result) {
+            fmt::print("{:<40} {:>10} KB\n", backup.filename, backup.sizeBytes / 1024);
+        }
+    });
+
+    std::string restoreFile;
+    auto* backup_restore = backup_cmd->add_subcommand("restore", "Restore from a backup");
+    backup_restore->add_option("file", restoreFile, "Backup file path")->required();
+    backup_restore->callback([&]() {
+        application::services::BackupService backupService;
+        auto result = backupService.restore(restoreFile);
+        if (!result) {
+            fmt::print(stderr, "Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+        fmt::print("Database restored from: {}\n", restoreFile);
+    });
+
+    // Duplicates subcommand
+    auto* duplicates_cmd = app.add_subcommand("duplicates", "Find potential duplicate transactions");
+    duplicates_cmd->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto transactions = txnRepo.findAll();
+        if (!transactions) {
+            fmt::print("Error: {}\n", core::errorMessage(transactions.error()));
+            return;
+        }
+
+        application::services::DuplicateDetector detector({.dateWindowDays = 1, .amountToleranceCents = 0, .normalizeCounterparty = true});
+        auto duplicates = detector.findDuplicates(*transactions);
+
+        if (duplicates.empty()) {
+            fmt::print("No potential duplicates found.\n");
+            return;
+        }
+
+        fmt::print("\nFound {} potential duplicate pairs:\n\n", duplicates.size());
+
+        for (size_t i = 0; i < duplicates.size() && i < 20; ++i) {
+            const auto& dup = duplicates[i];
+            auto dateStr1 = fmt::format("{:04d}-{:02d}-{:02d}",
+                static_cast<int>(dup.transaction1.date().year()),
+                static_cast<unsigned>(dup.transaction1.date().month()),
+                static_cast<unsigned>(dup.transaction1.date().day()));
+            auto dateStr2 = fmt::format("{:04d}-{:02d}-{:02d}",
+                static_cast<int>(dup.transaction2.date().year()),
+                static_cast<unsigned>(dup.transaction2.date().month()),
+                static_cast<unsigned>(dup.transaction2.date().day()));
+
+            fmt::print("[{:.0f}% confidence]\n", dup.confidence * 100);
+            fmt::print("  1: {} {} {} {}\n", dateStr1, dup.transaction1.amount().toStringDutch(),
+                dup.transaction1.counterpartyName().value_or("-"), dup.transaction1.description());
+            fmt::print("  2: {} {} {} {}\n\n", dateStr2, dup.transaction2.amount().toStringDutch(),
+                dup.transaction2.counterpartyName().value_or("-"), dup.transaction2.description());
+        }
+
+        if (duplicates.size() > 20) {
+            fmt::print("... and {} more\n", duplicates.size() - 20);
+        }
+    });
+
+    // Report subcommand
+    auto* report_cmd = app.add_subcommand("report", "Generate financial reports");
+
+    // Monthly report
+    auto* report_monthly = report_cmd->add_subcommand("monthly", "Monthly spending report");
+    std::string report_month;
+    report_monthly->add_option("--month,-m", report_month, "Month (YYYY-MM), default: current");
+    report_monthly->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) { fmt::print("Error: {}\n", core::errorMessage(dbResult.error())); return; }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto transactions = txnRepo.findAll();
+        if (!transactions) { fmt::print("Error: {}\n", core::errorMessage(transactions.error())); return; }
+
+        core::Date month = core::today();
+        if (!report_month.empty()) {
+            int y, m;
+            if (std::sscanf(report_month.c_str(), "%d-%d", &y, &m) == 2) {
+                month = core::Date{std::chrono::year{y}, std::chrono::month{static_cast<unsigned>(m)}, std::chrono::day{1}};
+            }
+        }
+
+        application::services::ReportService reportService;
+        auto summary = reportService.monthlySummary(*transactions, month);
+
+        auto monthName = [](unsigned m) -> std::string_view {
+            static const char* months[] = {"", "January", "February", "March", "April", "May", "June",
+                                           "July", "August", "September", "October", "November", "December"};
+            return m <= 12 ? months[m] : "Unknown";
+        };
+
+        fmt::print("\n");
+        fmt::print("═══════════════════════════════════════════════════════════════\n");
+        fmt::print("              MONTHLY REPORT - {} {}\n",
+            monthName(static_cast<unsigned>(month.month())), static_cast<int>(month.year()));
+        fmt::print("═══════════════════════════════════════════════════════════════\n\n");
+
+        if (!summary.incomeByCategory.empty()) {
+            fmt::print("INCOME\n");
+            for (const auto& item : summary.incomeByCategory) {
+                fmt::print("  {:<24} {:>14}\n", core::categoryName(item.category), item.amount.toStringDutch());
+            }
+            fmt::print("  {:<24} {:>14}\n", "────────────────────────", "──────────────");
+            fmt::print("  {:<24} {:>14}\n\n", "Total", summary.totalIncome.toStringDutch());
+        }
+
+        if (!summary.expensesByCategory.empty()) {
+            fmt::print("EXPENSES\n");
+            for (const auto& item : summary.expensesByCategory) {
+                fmt::print("  {:<24} {:>14}  ({:.1f}%)\n", core::categoryName(item.category), item.amount.toStringDutch(), item.percentage);
+            }
+            fmt::print("  {:<24} {:>14}\n", "────────────────────────", "──────────────");
+            fmt::print("  {:<24} {:>14}\n\n", "Total", summary.totalExpenses.toStringDutch());
+        }
+
+        fmt::print("SUMMARY\n");
+        fmt::print("  Net:           {}\n", summary.netAmount.toStringDutch());
+        fmt::print("  Savings Rate:  {:.1f}%\n", summary.savingsRate);
+        fmt::print("  Transactions:  {}\n\n", summary.transactionCount);
+    });
+
+    // Yearly report
+    auto* report_yearly = report_cmd->add_subcommand("yearly", "Annual summary");
+    std::string report_year;
+    report_yearly->add_option("--year,-y", report_year, "Year (YYYY), default: current");
+    report_yearly->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) { fmt::print("Error: {}\n", core::errorMessage(dbResult.error())); return; }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto transactions = txnRepo.findAll();
+        if (!transactions) { fmt::print("Error: {}\n", core::errorMessage(transactions.error())); return; }
+
+        int year = static_cast<int>(core::today().year());
+        if (!report_year.empty()) { year = std::stoi(report_year); }
+
+        application::services::ReportService reportService;
+        auto summary = reportService.yearlySummary(*transactions, year);
+
+        fmt::print("\n");
+        fmt::print("═══════════════════════════════════════════════════════════════\n");
+        fmt::print("                   ANNUAL REPORT - {}\n", year);
+        fmt::print("═══════════════════════════════════════════════════════════════\n\n");
+
+        auto monthName = [](unsigned m) -> std::string_view {
+            static const char* months[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+            return m <= 12 ? months[m] : "?";
+        };
+
+        fmt::print("{:<6} {:>14} {:>14} {:>14}\n", "Month", "Income", "Expenses", "Net");
+        fmt::print("{}\n", std::string(50, '-'));
+
+        for (const auto& m : summary.months) {
+            if (m.transactionCount == 0) continue;
+            fmt::print("{:<6} {:>14} {:>14} {:>14}\n",
+                monthName(static_cast<unsigned>(m.month.month())),
+                m.totalIncome.toStringDutch(),
+                m.totalExpenses.toStringDutch(),
+                m.netAmount.toStringDutch());
+        }
+
+        fmt::print("{}\n", std::string(50, '-'));
+        fmt::print("{:<6} {:>14} {:>14} {:>14}\n", "TOTAL",
+            summary.totalIncome.toStringDutch(),
+            summary.totalExpenses.toStringDutch(),
+            summary.netAmount.toStringDutch());
+        fmt::print("\nSavings Rate: {:.1f}%\n\n", summary.savingsRate);
+    });
+
+    // Trends report
+    auto* report_trends = report_cmd->add_subcommand("trends", "Spending trends");
+    int trend_months = 6;
+    report_trends->add_option("--months,-m", trend_months, "Number of months");
+    report_trends->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) { fmt::print("Error: {}\n", core::errorMessage(dbResult.error())); return; }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto transactions = txnRepo.findAll();
+        if (!transactions) { fmt::print("Error: {}\n", core::errorMessage(transactions.error())); return; }
+
+        application::services::ReportService reportService;
+        auto trends = reportService.spendingTrends(*transactions, core::today(), trend_months);
+
+        fmt::print("\n");
+        fmt::print("═══════════════════════════════════════════════════════════════\n");
+        fmt::print("              SPENDING TRENDS (last {} months)\n", trend_months);
+        fmt::print("═══════════════════════════════════════════════════════════════\n\n");
+
+        if (trends.empty()) {
+            fmt::print("Not enough data for trends.\n\n");
+            return;
+        }
+
+        fmt::print("{:<20} {:>14} {:>10}\n", "Category", "Avg/Month", "Change");
+        fmt::print("{}\n", std::string(46, '-'));
+
+        for (const auto& trend : trends) {
+            std::string changeStr;
+            if (trend.changePercent > 0) changeStr = fmt::format("+{:.1f}%", trend.changePercent);
+            else changeStr = fmt::format("{:.1f}%", trend.changePercent);
+
+            fmt::print("{:<20} {:>14} {:>10}\n",
+                core::categoryName(trend.category),
+                trend.averageMonthly.toStringDutch(),
+                changeStr);
+        }
+        fmt::print("\n");
+    });
+
+    report_cmd->callback([&]() {
+        if (report_cmd->get_subcommands().empty()) {
+            fmt::print("{}", report_cmd->help());
+        }
+    });
+
     CLI11_PARSE(app, argc, argv);
 
     if (app.get_subcommands().empty()) {
@@ -1616,6 +1786,9 @@ auto CliApp::printHelp() -> void {
     fmt::print("  overview          Show budget overview\n");
     fmt::print("  balance           Show net worth\n");
     fmt::print("  adjust            Manage recurring patterns\n");
+    fmt::print("  categorize        Re-categorize transactions\n");
+    fmt::print("  export            Export transactions to CSV or JSON\n");
+    fmt::print("  report            Generate financial reports\n");
     fmt::print("  config            Manage user configuration\n");
 }
 

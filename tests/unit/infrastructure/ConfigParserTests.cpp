@@ -353,3 +353,70 @@ TEST_CASE("ConfigParser handles European number format", "[config]") {
         CHECK(result->income[0].amount.cents() == 123456);
     }
 }
+
+TEST_CASE("ConfigParser error messages include line number and source", "[config][errors]") {
+    ConfigParser parser;
+
+    SECTION("unknown command shows source line") {
+        auto result = parser.parse(std::string_view{"foobar something"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.line == 1);
+        CHECK(err.sourceLine == "foobar something");
+        CHECK(err.message.find("foobar") != std::string::npos);
+    }
+
+    SECTION("error on correct line number with multiline input") {
+        std::string content = R"(# comment
+income "Salary" 5000 monthly salary
+badcommand something)";
+        auto result = parser.parse(std::string_view{content});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.line == 3);
+        CHECK(err.sourceLine == "badcommand something");
+    }
+
+    SECTION("invalid category shows source line") {
+        auto result = parser.parse(std::string_view{"categorize rewe as groceris"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.line == 1);
+        CHECK(err.sourceLine == "categorize rewe as groceris");
+        CHECK(err.message.find("groceris") != std::string::npos);
+    }
+
+    SECTION("did-you-mean suggestion for misspelled category") {
+        auto result = parser.parse(std::string_view{"categorize rewe as groceris"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.message.find("Did you mean") != std::string::npos);
+        CHECK(err.message.find("groceries") != std::string::npos);
+    }
+
+    SECTION("invalid frequency shows source line") {
+        auto result = parser.parse(std::string_view{R"(income "Test" 100 weekyl)"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.line == 1);
+        CHECK(!err.sourceLine.empty());
+        CHECK(err.message.find("weekyl") != std::string::npos);
+    }
+
+    SECTION("budget with misspelled category gets suggestion") {
+        auto result = parser.parse(std::string_view{"budget entertanment 200"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        CHECK(err.message.find("Did you mean") != std::string::npos);
+        CHECK(err.message.find("entertainment") != std::string::npos);
+    }
+
+    SECTION("what() formats nicely with source line") {
+        auto result = parser.parse(std::string_view{"categorize rewe as groceris"});
+        REQUIRE_FALSE(result.has_value());
+        auto err = std::get<ares::core::ParseError>(result.error());
+        auto msg = err.what();
+        CHECK(msg.find("Line 1:") != std::string::npos);
+        CHECK(msg.find("> categorize rewe as groceris") != std::string::npos);
+    }
+}
