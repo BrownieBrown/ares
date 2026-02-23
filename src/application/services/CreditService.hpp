@@ -28,6 +28,18 @@ public:
         core::CreditRepository& repo)
         -> std::expected<core::Credit, core::Error>;
 
+    [[nodiscard]] auto updateBalance(
+        const std::string& creditIdOrName,
+        core::Money newBalance,
+        core::CreditRepository& repo)
+        -> std::expected<core::Credit, core::Error>;
+
+    [[nodiscard]] auto updateMinimumPayment(
+        const std::string& creditIdOrName,
+        core::Money newMinPayment,
+        core::CreditRepository& repo)
+        -> std::expected<core::Credit, core::Error>;
+
     [[nodiscard]] auto findByIdOrName(
         const std::string& identifier,
         core::CreditRepository& repo)

@@ -73,6 +73,44 @@ auto CreditService::recordPayment(
     return *foundCredit;
 }
 
+auto CreditService::updateBalance(
+    const std::string& creditIdOrName,
+    core::Money newBalance,
+    core::CreditRepository& repo)
+    -> std::expected<core::Credit, core::Error>
+{
+    auto found = findByIdOrName(creditIdOrName, repo);
+    if (!found) return std::unexpected(found.error());
+    if (!found->has_value()) {
+        return std::unexpected(core::NotFoundError{"Credit", creditIdOrName});
+    }
+
+    auto credit = **found;
+    credit.setCurrentBalance(newBalance);
+    auto updateResult = repo.update(credit);
+    if (!updateResult) return std::unexpected(updateResult.error());
+    return credit;
+}
+
+auto CreditService::updateMinimumPayment(
+    const std::string& creditIdOrName,
+    core::Money newMinPayment,
+    core::CreditRepository& repo)
+    -> std::expected<core::Credit, core::Error>
+{
+    auto found = findByIdOrName(creditIdOrName, repo);
+    if (!found) return std::unexpected(found.error());
+    if (!found->has_value()) {
+        return std::unexpected(core::NotFoundError{"Credit", creditIdOrName});
+    }
+
+    auto credit = **found;
+    credit.setMinimumPayment(newMinPayment);
+    auto updateResult = repo.update(credit);
+    if (!updateResult) return std::unexpected(updateResult.error());
+    return credit;
+}
+
 auto CreditService::findByIdOrName(
     const std::string& identifier,
     core::CreditRepository& repo)

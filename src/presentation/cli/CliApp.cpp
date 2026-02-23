@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <cstdlib>
+#include <iostream>
 #include "infrastructure/import/IngDeCsvImporter.hpp"
 #include "infrastructure/import/GenericCsvImporter.hpp"
 #include "infrastructure/persistence/DatabaseConnection.hpp"
@@ -68,6 +69,28 @@ auto getDatabase() -> std::expected<std::shared_ptr<infrastructure::persistence:
 auto generateAdjustmentId() -> std::string {
     static int counter = 0;
     return fmt::format("adj-{}", ++counter);
+}
+
+// Parse a balance string supporting both "1987.72" and German "1.987,72" formats
+auto parseBalanceInput(const std::string& input) -> std::optional<double> {
+    if (input.empty()) return std::nullopt;
+
+    std::string cleaned = input;
+
+    // If it contains a comma, treat as German format: dots are thousands, comma is decimal
+    if (cleaned.find(',') != std::string::npos) {
+        std::erase(cleaned, '.');
+        std::replace(cleaned.begin(), cleaned.end(), ',', '.');
+    }
+
+    try {
+        size_t pos = 0;
+        double value = std::stod(cleaned, &pos);
+        if (pos != cleaned.size()) return std::nullopt;
+        return value;
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 auto printTransactionSummary(const infrastructure::import::IngDeImportResult& result) -> void {
@@ -330,6 +353,62 @@ auto CliApp::run(int argc, char* argv[]) -> int {
 
         fmt::print("Added account: {} ({}, {})\n", account_name,
                    core::accountTypeName(*parsedType), core::bankName(bankId));
+    });
+
+    // Accounts update
+    auto* accounts_update_cmd = accounts_cmd->add_subcommand("update", "Update an account balance");
+    std::string update_account_id;
+
+    accounts_update_cmd->add_option("id", update_account_id, "Account name or IBAN")->required();
+
+    accounts_update_cmd->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteAccountRepository accountRepo{*dbResult};
+        application::services::AccountService accountService;
+
+        auto accountOpt = accountService.findByNameOrIban(update_account_id, accountRepo);
+        if (!accountOpt || !accountOpt->has_value()) {
+            fmt::print("Account '{}' not found\n", update_account_id);
+            return;
+        }
+
+        auto account = **accountOpt;
+        fmt::print("  Account: {}\n", account.name());
+        fmt::print("  Current balance: {}\n", account.balance().toStringDutch());
+
+        fmt::print("  New balance: ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty()) {
+            fmt::print("Canceled.\n");
+            return;
+        }
+
+        auto parsed = parseBalanceInput(input);
+        if (!parsed) {
+            fmt::print("Error: Invalid amount '{}'\n", input);
+            return;
+        }
+
+        auto newBalance = core::Money::fromDouble(*parsed, core::Currency::EUR);
+        if (!newBalance) {
+            fmt::print("Error: Invalid balance amount\n");
+            return;
+        }
+
+        fmt::print("  Balance: {} -> {}\n", account.balance().toStringDutch(), newBalance->toStringDutch());
+        account.setBalance(*newBalance);
+
+        if (auto result = accountRepo.update(account); !result) {
+            fmt::print("Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+
+        fmt::print("Updated account: {}\n", account.name());
     });
 
     accounts_cmd->callback([&]() {
@@ -643,6 +722,84 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         fmt::print("  Previous balance: {}\n", oldBalance.toStringDutch());
         fmt::print("  Payment:          {}\n", paymentMoney->toStringDutch());
         fmt::print("  New balance:      {}\n", result->currentBalance().toStringDutch());
+    });
+
+    // Credits update
+    auto* credits_update_cmd = credits_cmd->add_subcommand("update", "Update a credit balance");
+    std::string update_credit_id;
+
+    credits_update_cmd->add_option("id", update_credit_id, "Credit name or ID")->required();
+
+    credits_update_cmd->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
+        application::services::CreditService creditService;
+
+        auto found = creditService.findByIdOrName(update_credit_id, creditRepo);
+        if (!found || !found->has_value()) {
+            fmt::print("Credit '{}' not found\n", update_credit_id);
+            return;
+        }
+
+        auto credit = **found;
+        fmt::print("  Credit: {}\n", credit.name());
+        fmt::print("  Current balance: {}\n", credit.currentBalance().toStringDutch());
+        fmt::print("  Min payment:     {}\n", credit.minimumPayment().toStringDutch());
+
+        // Prompt for new balance
+        fmt::print("  New balance: ");
+        std::string balanceInput;
+        if (!std::getline(std::cin, balanceInput) || balanceInput.empty()) {
+            fmt::print("Canceled.\n");
+            return;
+        }
+
+        auto parsedBalance = parseBalanceInput(balanceInput);
+        if (!parsedBalance) {
+            fmt::print("Error: Invalid amount '{}'\n", balanceInput);
+            return;
+        }
+
+        auto newBalance = core::Money::fromDouble(*parsedBalance, core::Currency::EUR);
+        if (!newBalance) {
+            fmt::print("Error: Invalid balance amount\n");
+            return;
+        }
+
+        fmt::print("  Balance: {} -> {}\n", credit.currentBalance().toStringDutch(), newBalance->toStringDutch());
+        credit.setCurrentBalance(*newBalance);
+
+        // Prompt for new minimum payment (optional)
+        fmt::print("  New minimum payment (enter to skip): ");
+        std::string minPayInput;
+        if (std::getline(std::cin, minPayInput) && !minPayInput.empty()) {
+            auto parsedMinPay = parseBalanceInput(minPayInput);
+            if (!parsedMinPay) {
+                fmt::print("Error: Invalid amount '{}'\n", minPayInput);
+                return;
+            }
+
+            auto newMinPayment = core::Money::fromDouble(*parsedMinPay, core::Currency::EUR);
+            if (!newMinPayment) {
+                fmt::print("Error: Invalid payment amount\n");
+                return;
+            }
+
+            fmt::print("  Min Payment: {} -> {}\n", credit.minimumPayment().toStringDutch(), newMinPayment->toStringDutch());
+            credit.setMinimumPayment(*newMinPayment);
+        }
+
+        if (auto result = creditRepo.update(credit); !result) {
+            fmt::print("Error: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+
+        fmt::print("Updated credit: {} ({:.1f}% paid off)\n", credit.name(), credit.percentagePaidOff());
     });
 
     credits_cmd->callback([&]() {
