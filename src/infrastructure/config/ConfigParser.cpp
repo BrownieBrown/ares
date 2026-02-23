@@ -183,9 +183,27 @@ auto ConfigParser::parseCategorizeLine(std::string_view line, std::string_view r
         });
     }
 
+    // Check if pattern is an amount match (e.g., "amount:73.48")
+    std::optional<int64_t> amountCents;
+    auto lowerPattern = toLower(pattern);
+    if (lowerPattern.starts_with("amount:")) {
+        auto amountStr = lowerPattern.substr(7);
+        auto money = core::Money::fromString(amountStr, core::Currency::EUR);
+        if (!money) {
+            return std::unexpected(core::ParseError{
+                .message = fmt::format("Invalid amount: '{}'", amountStr),
+                .line = lineNumber,
+                .sourceLine = std::string{rawLine}
+            });
+        }
+        amountCents = money->cents();
+        lowerPattern = "";  // No text pattern for amount-only rules
+    }
+
     return CategorizationRule{
-        .pattern = toLower(pattern),
-        .category = *category
+        .pattern = lowerPattern,
+        .category = *category,
+        .amountCents = amountCents
     };
 }
 
@@ -727,6 +745,13 @@ auto ConfigParser::matchesPattern(std::string_view pattern, std::string_view tex
     std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
+    // Strip spaces from both to handle ING bank column-break formatting artifacts
+    lowerText.erase(std::remove(lowerText.begin(), lowerText.end(), ' '), lowerText.end());
+    std::string normalizedPattern{pattern};
+    normalizedPattern.erase(std::remove(normalizedPattern.begin(), normalizedPattern.end(), ' '),
+                            normalizedPattern.end());
+    pattern = normalizedPattern;
+
     size_t patternIdx = 0;
     size_t textIdx = 0;
     size_t starIdx = std::string::npos;
@@ -763,7 +788,8 @@ auto ConfigParser::matchesPattern(std::string_view pattern, std::string_view tex
 auto ConfigParser::matchCategory(
     const std::vector<CategorizationRule>& rules,
     std::string_view counterparty,
-    std::string_view description)
+    std::string_view description,
+    std::optional<int64_t> amountCents)
     -> std::optional<core::TransactionCategory>
 {
     std::string lowerCp{counterparty};
@@ -773,16 +799,35 @@ auto ConfigParser::matchCategory(
     std::transform(lowerDesc.begin(), lowerDesc.end(), lowerDesc.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
+    // Strip spaces to handle ING bank column-break formatting artifacts
+    auto stripSpaces = [](const std::string& s) {
+        std::string r;
+        r.reserve(s.size());
+        for (char c : s) if (c != ' ') r += c;
+        return r;
+    };
+    auto cpN = stripSpaces(lowerCp);
+    auto descN = stripSpaces(lowerDesc);
+
     for (const auto& rule : rules) {
-        // Check if pattern matches counterparty or description
+        // Amount-only rule: match on exact amount (absolute value)
+        if (rule.amountCents) {
+            if (amountCents && std::abs(*amountCents) == std::abs(*rule.amountCents)) {
+                return rule.category;
+            }
+            continue;  // Amount rules don't do text matching
+        }
+
+        // Check if pattern matches counterparty or description (wildcard)
         if (matchesPattern(rule.pattern, lowerCp) ||
             matchesPattern(rule.pattern, lowerDesc)) {
             return rule.category;
         }
 
-        // Also check for simple substring match
-        if (lowerCp.find(rule.pattern) != std::string::npos ||
-            lowerDesc.find(rule.pattern) != std::string::npos) {
+        // Also check for simple substring match (space-normalized)
+        auto patN = stripSpaces(rule.pattern);
+        if (cpN.find(patN) != std::string::npos ||
+            descN.find(patN) != std::string::npos) {
             return rule.category;
         }
     }

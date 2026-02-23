@@ -10,13 +10,14 @@ auto CategoryMatcher::setCustomRules(std::vector<infrastructure::config::Categor
 
 auto CategoryMatcher::categorize(
     std::string_view counterparty,
-    std::string_view description)
+    std::string_view description,
+    std::optional<int64_t> amountCents)
     -> CategorizationResult
 {
     // Check custom rules first
     if (!customRules_.empty()) {
         auto customCategory = infrastructure::config::ConfigParser::matchCategory(
-            customRules_, counterparty, description);
+            customRules_, counterparty, description, amountCents);
         if (customCategory) {
             // Find which rule matched to track stats
             std::string cp{counterparty};
@@ -24,10 +25,20 @@ auto CategoryMatcher::categorize(
             std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
             std::transform(desc.begin(), desc.end(), desc.begin(), ::tolower);
 
+            // Strip spaces for ING bank formatting normalization
+            auto stripSpaces = [](const std::string& s) {
+                std::string r;
+                r.reserve(s.size());
+                for (char c : s) if (c != ' ') r += c;
+                return r;
+            };
+            auto cpN = stripSpaces(cp);
+            auto descN = stripSpaces(desc);
+
             for (const auto& rule : customRules_) {
-                // Simple check: if the pattern appears in counterparty or description
-                if (cp.find(rule.pattern) != std::string::npos ||
-                    desc.find(rule.pattern) != std::string::npos) {
+                auto patN = stripSpaces(rule.pattern);
+                if (cpN.find(patN) != std::string::npos ||
+                    descN.find(patN) != std::string::npos) {
                     ruleHits_[rule.pattern]++;
                     return {*customCategory, rule.pattern, true};
                 }
@@ -92,6 +103,11 @@ auto CategoryMatcher::matchBuiltInRules(
         }
     }
 
+    // Strip spaces to handle ING bank column-break formatting artifacts
+    // (e.g., "Sony Int eractive" → "sonyinteractive")
+    cp.erase(std::remove(cp.begin(), cp.end(), ' '), cp.end());
+    desc.erase(std::remove(desc.begin(), desc.end(), ' '), desc.end());
+
     // Salary / Income patterns
     if (cp.find("gehalt") != std::string::npos || cp.find("lohn") != std::string::npos ||
         desc.find("gehalt") != std::string::npos || desc.find("salary") != std::string::npos ||
@@ -113,8 +129,8 @@ auto CategoryMatcher::matchBuiltInRules(
     }
 
     // Internal transfers (self-transfers between own accounts)
-    if (desc.find("umbuchung") != std::string::npos || desc.find("own account") != std::string::npos ||
-        desc.find("eigenes konto") != std::string::npos) {
+    if (desc.find("umbuchung") != std::string::npos || desc.find("ownaccount") != std::string::npos ||
+        desc.find("eigeneskonto") != std::string::npos) {
         return core::TransactionCategory::InternalTransfer;
     }
 
@@ -136,7 +152,7 @@ auto CategoryMatcher::matchBuiltInRules(
         cp.find("apotheke") != std::string::npos || cp.find("klinik") != std::string::npos ||
         cp.find("praxis") != std::string::npos || cp.find("physio") != std::string::npos ||
         desc.find("chiropraktik") != std::string::npos || desc.find("behandlung") != std::string::npos ||
-        cp.find("fit star") != std::string::npos || cp.find("fitstar") != std::string::npos ||
+        cp.find("fitstar") != std::string::npos ||
         cp.find("fitness") != std::string::npos || cp.find("gym") != std::string::npos ||
         desc.find("mitgliedsbeitrag") != std::string::npos) {
         return core::TransactionCategory::Healthcare;
@@ -144,13 +160,13 @@ auto CategoryMatcher::matchBuiltInRules(
 
     // Restaurants & Food Delivery - check before subscriptions
     if (cp.find("wolt") != std::string::npos || cp.find("lieferando") != std::string::npos ||
-        cp.find("uber eats") != std::string::npos || cp.find("deliveroo") != std::string::npos ||
+        cp.find("ubereats") != std::string::npos || cp.find("deliveroo") != std::string::npos ||
         cp.find("restaurant") != std::string::npos || cp.find("cafe") != std::string::npos ||
         cp.find("bistro") != std::string::npos || cp.find("imbiss") != std::string::npos ||
         desc.find("sushi") != std::string::npos || desc.find("pizza") != std::string::npos ||
         desc.find("burger") != std::string::npos || desc.find("cafe") != std::string::npos ||
         desc.find("restaurant") != std::string::npos || desc.find("amari") != std::string::npos ||
-        desc.find("kantine") != std::string::npos || desc.find("ciao amore") != std::string::npos) {
+        desc.find("kantine") != std::string::npos || desc.find("ciaoamore") != std::string::npos) {
         return core::TransactionCategory::Restaurants;
     }
 
@@ -164,7 +180,7 @@ auto CategoryMatcher::matchBuiltInRules(
 
     // Entertainment (games, streaming purchases)
     if (desc.find("steam") != std::string::npos || desc.find("humble") != std::string::npos ||
-        desc.find("gog.com") != std::string::npos || desc.find("epic games") != std::string::npos ||
+        desc.find("gog.com") != std::string::npos || desc.find("epicgames") != std::string::npos ||
         desc.find("nintendo") != std::string::npos || desc.find("xbox") != std::string::npos ||
         cp.find("steam") != std::string::npos || cp.find("valve") != std::string::npos) {
         return core::TransactionCategory::Entertainment;
@@ -174,15 +190,15 @@ auto CategoryMatcher::matchBuiltInRules(
     if (cp.find("netflix") != std::string::npos || desc.find("netflix") != std::string::npos ||
         cp.find("spotify") != std::string::npos || desc.find("spotify") != std::string::npos ||
         cp.find("disney") != std::string::npos || desc.find("disney") != std::string::npos ||
-        desc.find("prime video") != std::string::npos || desc.find("primevideo") != std::string::npos ||
+        desc.find("primevideo") != std::string::npos ||
         desc.find("amznprime") != std::string::npos ||
         cp.find("apple.com") != std::string::npos || desc.find("itunes") != std::string::npos ||
-        desc.find("apple services") != std::string::npos || desc.find("apple se") != std::string::npos ||
-        desc.find("yt premium") != std::string::npos || desc.find("youtube") != std::string::npos ||
-        desc.find("google payment") != std::string::npos || desc.find("google,") != std::string::npos ||
+        desc.find("appleservices") != std::string::npos || desc.find("applese") != std::string::npos ||
+        desc.find("ytpremium") != std::string::npos || desc.find("youtube") != std::string::npos ||
+        desc.find("googlepayment") != std::string::npos || desc.find("google,") != std::string::npos ||
         desc.find("proton") != std::string::npos ||
-        desc.find("sony interactive") != std::string::npos || desc.find("playstation") != std::string::npos ||
-        desc.find("ad free") != std::string::npos) {
+        desc.find("sonyinteractive") != std::string::npos || desc.find("playstation") != std::string::npos ||
+        desc.find("adfree") != std::string::npos) {
         return core::TransactionCategory::Subscriptions;
     }
 
@@ -207,13 +223,13 @@ auto CategoryMatcher::matchBuiltInRules(
     }
 
     // Transportation - gas stations, parking, car sharing, public transport
-    if (cp.find("miles") != std::string::npos || desc.find("miles mo") != std::string::npos ||
-        cp.find("db ") != std::string::npos || cp.find("deutsche bahn") != std::string::npos ||
+    if (cp.find("miles") != std::string::npos || desc.find("milesmo") != std::string::npos ||
+        cp.find("db") != std::string::npos || cp.find("deutschebahn") != std::string::npos ||
         cp.find("tankstelle") != std::string::npos ||
         cp.find("shell") != std::string::npos || cp.find("aral") != std::string::npos ||
         cp.find("agip") != std::string::npos || desc.find("agip") != std::string::npos ||
         desc.find("parkster") != std::string::npos || desc.find("parking") != std::string::npos ||
-        cp.find("sixt") != std::string::npos || cp.find("share now") != std::string::npos ||
+        cp.find("sixt") != std::string::npos || cp.find("sharenow") != std::string::npos ||
         desc.find("tanken") != std::string::npos || desc.find("service-station") != std::string::npos) {
         return core::TransactionCategory::Transportation;
     }
@@ -228,9 +244,9 @@ auto CategoryMatcher::matchBuiltInRules(
     }
 
     // Shopping (Amazon marketplace, Zalando, Klarna, etc.)
-    if (desc.find("amzn mktp") != std::string::npos || desc.find("amazon mktp") != std::string::npos ||
-        desc.find("amazon monatsabrech") != std::string::npos ||
-        cp.find("amazon payments") != std::string::npos ||
+    if (desc.find("amznmktp") != std::string::npos || desc.find("amazonmktp") != std::string::npos ||
+        desc.find("amazonmonatsabrech") != std::string::npos ||
+        cp.find("amazonpayments") != std::string::npos ||
         cp.find("zalando") != std::string::npos || desc.find("zalando") != std::string::npos ||
         cp.find("riverty") != std::string::npos ||
         cp.find("klarna") != std::string::npos || desc.find("klarna") != std::string::npos) {

@@ -24,7 +24,8 @@ public:
 
     [[nodiscard]] auto categorize(
         std::string_view counterparty,
-        std::string_view description)
+        std::string_view description,
+        std::optional<int64_t> amountCents = std::nullopt)
         -> CategorizationResult;
 
     [[nodiscard]] auto getRuleStats() const

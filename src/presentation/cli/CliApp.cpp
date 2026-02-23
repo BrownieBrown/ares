@@ -3,6 +3,7 @@
 #include <fmt/format.h>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <cstdlib>
 #include <iostream>
 #include "infrastructure/import/IngDeCsvImporter.hpp"
@@ -913,6 +914,62 @@ auto CliApp::run(int argc, char* argv[]) -> int {
                    static_cast<int>(current.month.year()), RESET, CYAN, RESET);
         fmt::print("{}╚══════════════════════════════════════════════════════════════╝{}\n\n", CYAN, RESET);
 
+        // Pre-compute budget totals and recommended debt payments
+        // so all display sections use consistent recommended amounts
+        int64_t budgetTotalCents = 0;
+        if (configResult) {
+            for (const auto& b : configResult->budgets) {
+                budgetTotalCents += b.limit.cents();
+            }
+        }
+        auto budgetTotal = core::Money{budgetTotalCents, core::Currency::EUR};
+
+        core::Money finalAvailable{0, core::Currency::EUR};
+        if (auto afterBudget = current.netCashFlow - budgetTotal) {
+            if (auto afterDebt = *afterBudget - current.totalDebtPayments) {
+                finalAvailable = *afterDebt;
+            }
+        }
+
+        // Compute recommended debt payments using avalanche method
+        std::vector<std::pair<std::string, core::Money>> recommendedDebtPayments;
+        core::Money totalRecommendedDebt{0, core::Currency::EUR};
+        core::Money toSavings = finalAvailable;
+        core::Money extraDebt{0, core::Currency::EUR};
+
+        int64_t savingsCents = 0;
+        for (const auto& account : *accounts) {
+            if (account.type() == core::AccountType::Savings) {
+                savingsCents += account.balance().cents();
+            }
+        }
+        core::Money currentEmergencyFund{savingsCents, core::Currency::EUR};
+
+        std::optional<application::services::FinancialRecommendation> recommendation;
+
+        if (!credits->empty()) {
+            recommendation = budgetService.calculateRecommendation(current, *credits, currentEmergencyFund, core::today());
+
+            auto halfAvailable = finalAvailable.cents() / 2;
+            extraDebt = core::Money{halfAvailable, core::Currency::EUR};
+            toSavings = core::Money{finalAvailable.cents() - halfAvailable, core::Currency::EUR};
+
+            auto extraRemaining = extraDebt;
+            for (const auto& plan : recommendation->debtPayoffPlans) {
+                auto actualPayment = plan.minimumPayment;
+                if (extraRemaining.cents() > 0) {
+                    if (auto sum = actualPayment + extraRemaining) {
+                        actualPayment = *sum;
+                    }
+                    extraRemaining = core::Money{0, core::Currency::EUR};
+                }
+                recommendedDebtPayments.emplace_back(plan.creditName, actualPayment);
+                if (auto sum = totalRecommendedDebt + actualPayment) {
+                    totalRecommendedDebt = *sum;
+                }
+            }
+        }
+
         // Fixed Income section (from config)
         if (!current.fixedIncome.empty()) {
             fmt::print("{}💰 FIXED INCOME{}\n", GREEN, RESET);
@@ -928,7 +985,6 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         if (!current.fixedExpenses.empty()) {
             fmt::print("{}📋 FIXED EXPENSES{}\n", YELLOW, RESET);
             for (const auto& item : current.fixedExpenses) {
-                // Truncate long names to fit alignment
                 std::string name = item.name;
                 if (name.size() > 26) name = name.substr(0, 23) + "...";
                 fmt::print("  {}{:<26}{} {:>14}\n", DIM, name, RESET, item.amount.toStringDutch());
@@ -938,14 +994,16 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             fmt::print("\n");
         }
 
-        // Debt payments section
-        if (!current.debtPayments.empty()) {
+        // Debt Payments section (recommended amounts from avalanche method)
+        if (!recommendedDebtPayments.empty()) {
             fmt::print("{}💳 DEBT PAYMENTS{}\n", RED, RESET);
-            for (const auto& [name, amount] : current.debtPayments) {
-                fmt::print("  {}{:<28}{} {:>14}\n", DIM, name, RESET, amount.toStringDutch());
+            for (const auto& [debtName, recAmount] : recommendedDebtPayments) {
+                std::string name = debtName;
+                if (name.size() > 28) name = name.substr(0, 25) + "...";
+                fmt::print("  {}{:<28}{} {:>14}\n", DIM, name, RESET, recAmount.toStringDutch());
             }
             fmt::print("  {}────────────────────────────{} {}──────────────{}\n", DIM, RESET, DIM, RESET);
-            fmt::print("  {}{:<28}{} {}{:>14}{}\n", BOLD, "Total", RESET, RED, current.totalDebtPayments.toStringDutch(), RESET);
+            fmt::print("  {}{:<28}{} {}{:>14}{}\n", BOLD, "Total", RESET, RED, totalRecommendedDebt.toStringDutch(), RESET);
             fmt::print("\n");
         }
 
@@ -1018,37 +1076,20 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             fmt::print("{}└────────────────┴────────────┴────────────┘{}\n\n", DIM, RESET);
         }
 
-        // Calculate budget total for correct available calculation
-        int64_t budgetTotalCents = 0;
-        if (configResult) {
-            for (const auto& b : configResult->budgets) {
-                budgetTotalCents += b.limit.cents();
-            }
-        }
-        auto budgetTotal = core::Money{budgetTotalCents, core::Currency::EUR};
-
-        // Calculate correct available for savings:
-        // Net Cash Flow - Variable Budget - Debt Payments
-        core::Money finalAvailable{0, core::Currency::EUR};
-        if (auto afterBudget = current.netCashFlow - budgetTotal) {
-            if (auto afterDebt = *afterBudget - current.totalDebtPayments) {
-                finalAvailable = *afterDebt;
-            }
-        }
-
-        // Summary
+        // Summary box
         fmt::print("{}╔══════════════════════════════════════════════════════════════╗{}\n", CYAN, RESET);
-        auto netColor = current.netCashFlow.isNegative() ? RED : GREEN;
         fmt::print("{}║{}  {:<26} {}{:>14}{}                   {}║{}\n",
-            CYAN, RESET, "NET CASH FLOW", netColor, current.netCashFlow.toStringDutch(), RESET, CYAN, RESET);
+            CYAN, RESET, "Income", GREEN, current.totalFixedIncome.toStringDutch(), RESET, CYAN, RESET);
         fmt::print("{}║{}  {:<26} {}{:>14}{}                   {}║{}\n",
-            CYAN, RESET, "- Variable Budget", YELLOW, budgetTotal.toStringDutch(), RESET, CYAN, RESET);
+            CYAN, RESET, "Fixed Expenses", YELLOW, current.totalFixedExpenses.toStringDutch(), RESET, CYAN, RESET);
         fmt::print("{}║{}  {:<26} {}{:>14}{}                   {}║{}\n",
-            CYAN, RESET, "- Debt Payments", RED, current.totalDebtPayments.toStringDutch(), RESET, CYAN, RESET);
+            CYAN, RESET, "Debt Payments", RED, totalRecommendedDebt.toStringDutch(), RESET, CYAN, RESET);
+        fmt::print("{}║{}  {:<26} {}{:>14}{}                   {}║{}\n",
+            CYAN, RESET, "Variable Budget", YELLOW, budgetTotal.toStringDutch(), RESET, CYAN, RESET);
         fmt::print("{}║{}  ──────────────────────────────────────────                   {}║{}\n", CYAN, RESET, CYAN, RESET);
-        auto savingsColor = finalAvailable.isNegative() ? RED : GREEN;
+        auto savingsColor = toSavings.isNegative() ? RED : GREEN;
         fmt::print("{}║{}  {:<26} {}{:>14}{}                   {}║{}\n",
-            CYAN, RESET, "AVAILABLE FOR SAVINGS", savingsColor, finalAvailable.toStringDutch(), RESET, CYAN, RESET);
+            CYAN, RESET, "\xe2\x86\x92 Transfer to Savings", savingsColor, toSavings.toStringDutch(), RESET, CYAN, RESET);
         fmt::print("{}╚══════════════════════════════════════════════════════════════╝{}\n\n", CYAN, RESET);
 
         // Accounts section
@@ -1080,24 +1121,8 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             fmt::print("  {}{:<26}{} {}{:>14}{}\n\n", BOLD, "Total", RESET, totalColor, totalAccounts.toStringDutch(), RESET);
         }
 
-        // Calculate and display recommendations
-        if (!credits->empty()) {
-            // Use savings accounts as emergency fund
-            int64_t savingsCents = 0;
-            for (const auto& account : *accounts) {
-                if (account.type() == core::AccountType::Savings) {
-                    savingsCents += account.balance().cents();
-                }
-            }
-            core::Money currentEmergencyFund{savingsCents, core::Currency::EUR};
-            auto recommendation = budgetService.calculateRecommendation(current, *credits, currentEmergencyFund, core::today());
-
-            // Calculate allocations using correct available amount (after budget)
-            // Split: 50% extra debt payment, 50% savings (until emergency fund complete)
-            auto halfAvailable = finalAvailable.cents() / 2;
-            auto extraDebt = core::Money{halfAvailable, core::Currency::EUR};
-            auto toSavings = core::Money{finalAvailable.cents() - halfAvailable, core::Currency::EUR};
-
+        // Debt payoff recommendation (uses pre-computed recommendedDebtPayments)
+        if (recommendation) {
             fmt::print("{}💡 DEBT PAYOFF RECOMMENDATION{}\n", BOLD, RESET);
             fmt::print("{}Using avalanche method (highest interest first){}\n\n", DIM, RESET);
 
@@ -1105,44 +1130,34 @@ auto CliApp::run(int argc, char* argv[]) -> int {
                 DIM, "Debt", "Balance", "Pay", "Rate", "Payoff", RESET);
             fmt::print("  {}─────────────────────────────────────────────────────────────────{}\n", DIM, RESET);
 
-            // Recalculate payoff with correct extra payment (goes to highest interest first)
-            auto extraDebtPayment = extraDebt;
             core::Date latestPayoff = core::today();
+            size_t idx = 0;
 
-            for (const auto& plan : recommendation.debtPayoffPlans) {
+            for (const auto& plan : recommendation->debtPayoffPlans) {
                 std::string name = plan.creditName;
                 if (name.size() > 22) name = name.substr(0, 19) + "...";
 
-                // Calculate actual recommended payment (minimum + extra if highest interest)
-                auto actualPayment = plan.minimumPayment;
-                if (extraDebtPayment.cents() > 0) {
-                    // First debt (highest interest) gets all the extra
-                    if (auto sum = actualPayment + extraDebtPayment) {
-                        actualPayment = *sum;
-                    }
-                    extraDebtPayment = core::Money{0, core::Currency::EUR};
-                }
+                // Use the pre-computed recommended payment
+                auto actualPayment = (idx < recommendedDebtPayments.size())
+                    ? recommendedDebtPayments[idx].second
+                    : plan.minimumPayment;
+                ++idx;
 
-                // Recalculate months to payoff
                 int monthsToPayoff = budgetService.calculateMonthsToPayoff(
                     plan.currentBalance, actualPayment, plan.interestRate);
 
-                // Calculate payoff date
                 auto payoffDate = budgetService.calculatePayoffDate(core::today(), monthsToPayoff);
                 if (payoffDate > latestPayoff) {
                     latestPayoff = payoffDate;
                 }
 
-                // Format payoff date
                 auto payoffMonth = static_cast<unsigned>(payoffDate.month());
                 auto payoffYear = static_cast<int>(payoffDate.year()) % 100;
                 std::string payoffStr = fmt::format("{} '{:02d}",
                     std::string(monthName(payoffMonth)).substr(0, 3), payoffYear);
 
-                // Format interest rate
                 std::string rateStr = fmt::format("{:.2f}%", plan.interestRate * 100.0);
 
-                // Color extra payments green
                 const char* payColor = actualPayment.cents() > plan.minimumPayment.cents() ? GREEN : RESET;
 
                 fmt::print("  {:<22}  {:>12}  {}{:>10}{}  {:>8}  {:>8}\n",
@@ -1154,37 +1169,15 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             }
             fmt::print("\n");
 
-            // Debt-free date - use the recalculated latest payoff
             auto freeMonth = static_cast<unsigned>(latestPayoff.month());
             auto freeYear = static_cast<int>(latestPayoff.year());
             fmt::print("{}🎯 DEBT-FREE DATE: {}{} {}{}\n\n",
                 BOLD, GREEN, monthName(freeMonth), freeYear, RESET);
 
-            // Total debt = minimums + extra to highest interest
-            core::Money totalDebtPayment = current.totalDebtPayments;
-            if (auto sum = totalDebtPayment + extraDebt) {
-                totalDebtPayment = *sum;
-            }
-
-            // Savings & Investment allocation
-            fmt::print("{}📈 MONTHLY ALLOCATION{}\n", BOLD, RESET);
-
-            fmt::print("{}┌────────────────────────────┬────────────────┐{}\n", DIM, RESET);
-            fmt::print("{}│{} {:<26} {}│{} {:>14} {}│{}\n",
-                DIM, RESET, "Total Debt Payments", DIM, RESET,
-                totalDebtPayment.toStringDutch(), DIM, RESET);
-            fmt::print("{}│{} {:<26} {}│{} {:>14} {}│{}\n",
-                DIM, RESET, "Transfer to Savings", DIM, RESET,
-                toSavings.toStringDutch(), DIM, RESET);
-            fmt::print("{}│{} {:<26} {}│{} {:>14} {}│{}\n",
-                DIM, RESET, "Transfer to Investments", DIM, RESET,
-                core::Money{0, core::Currency::EUR}.toStringDutch(), DIM, RESET);
-            fmt::print("{}└────────────────────────────┴────────────────┘{}\n\n", DIM, RESET);
-
             // Emergency fund status
-            if (!recommendation.emergencyFundComplete) {
+            if (!recommendation->emergencyFundComplete) {
                 fmt::print("{}⚠️  Emergency fund not complete. Current: {} / Target: {} (3 months expenses){}\n",
-                    YELLOW, currentEmergencyFund.toStringDutch(), recommendation.targetEmergencyFund.toStringDutch(), RESET);
+                    YELLOW, currentEmergencyFund.toStringDutch(), recommendation->targetEmergencyFund.toStringDutch(), RESET);
                 fmt::print("{}   Currently splitting available funds: 50% debt, 50% savings{}\n\n", DIM, RESET);
             }
         }
@@ -1402,7 +1395,8 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             for (auto& txn : *transactions) {
                 auto result = matcher.categorize(
                     txn.counterpartyName().value_or(""),
-                    txn.description());
+                    txn.description(),
+                    txn.amount().cents());
                 if (result.category != txn.category()) {
                     txn.setCategory(result.category);
                     (void)txnRepo.update(txn);

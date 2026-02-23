@@ -17,6 +17,7 @@ namespace ares::infrastructure::config {
 struct CategorizationRule {
     std::string pattern;  // Lowercase, supports * wildcard
     core::TransactionCategory category;
+    std::optional<int64_t> amountCents;  // If set, only match this exact amount
 };
 
 struct ConfiguredIncome {
@@ -105,7 +106,8 @@ public:
     [[nodiscard]] static auto matchCategory(
         const std::vector<CategorizationRule>& rules,
         std::string_view counterparty,
-        std::string_view description)
+        std::string_view description,
+        std::optional<int64_t> amountCents = std::nullopt)
         -> std::optional<core::TransactionCategory>;
 
 private:
