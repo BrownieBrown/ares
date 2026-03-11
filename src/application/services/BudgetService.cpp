@@ -102,9 +102,10 @@ auto BudgetService::calculateCurrentMonth(
     budget.totalFixedIncome = fixedIncome;
     budget.totalFixedExpenses = fixedExpenses;
 
-    // Calculate debt payments
+    // Calculate debt payments (skip paid-off credits)
     core::Money totalDebt{0, core::Currency::EUR};
     for (const auto& credit : credits) {
+        if (credit.currentBalance().cents() <= 0) continue;
         budget.debtPayments.emplace_back(credit.name(), credit.minimumPayment());
         if (auto sum = totalDebt + credit.minimumPayment()) {
             totalDebt = *sum;
@@ -341,9 +342,10 @@ auto BudgetService::calculateRecommendation(
     rec.currentEmergencyFund = currentEmergencyFund;
     rec.emergencyFundComplete = currentEmergencyFund.cents() >= threeMonths;
 
-    // Calculate minimum debt payments
+    // Calculate minimum debt payments (skip paid-off credits)
     rec.totalMinimumDebtPayment = core::Money{0, core::Currency::EUR};
     for (const auto& credit : credits) {
+        if (credit.currentBalance().cents() <= 0) continue;
         if (auto sum = rec.totalMinimumDebtPayment + credit.minimumPayment()) {
             rec.totalMinimumDebtPayment = *sum;
         }
@@ -356,16 +358,38 @@ auto BudgetService::calculateRecommendation(
             return a.interestRate() > b.interestRate();
         });
 
+    // Check if all active debts have low interest rates
+    rec.allDebtsLowInterest = true;
+    bool hasActiveDebt = false;
+    for (const auto& credit : sortedCredits) {
+        if (credit.currentBalance().cents() <= 0) continue;
+        hasActiveDebt = true;
+        if (credit.interestRate() >= kLowInterestThreshold) {
+            rec.allDebtsLowInterest = false;
+            break;
+        }
+    }
+    if (!hasActiveDebt) {
+        rec.allDebtsLowInterest = false;
+    }
+
     // Calculate extra money available for debt payoff
     core::Money extraForDebt{0, core::Currency::EUR};
 
-    // Strategy: Pay minimums + allocate extra to highest interest debt
-    // Until emergency fund is complete, split: 50% emergency, 50% extra debt
-    // After emergency fund complete: 70% debt, 30% investment
-
     auto availableAfterMinimums = budget.availableForSavings;
 
-    if (!rec.emergencyFundComplete) {
+    if (rec.allDebtsLowInterest) {
+        // All debts below threshold: only pay minimums, all extra to savings/investment
+        extraForDebt = core::Money{0, core::Currency::EUR};
+        if (!rec.emergencyFundComplete) {
+            rec.recommendedSavings = availableAfterMinimums;
+            rec.recommendedInvestment = core::Money{0, core::Currency::EUR};
+        } else {
+            rec.recommendedSavings = core::Money{0, core::Currency::EUR};
+            rec.recommendedInvestment = availableAfterMinimums;
+        }
+    } else if (!rec.emergencyFundComplete) {
+        // Strategy: Pay minimums + allocate extra to highest interest debt
         // Split available money: 50% savings, 50% extra debt payment
         auto halfCents = availableAfterMinimums.cents() / 2;
         rec.recommendedSavings = core::Money{halfCents, core::Currency::EUR};
@@ -384,6 +408,7 @@ auto BudgetService::calculateRecommendation(
     core::Money remainingExtra = extraForDebt;
 
     for (const auto& credit : sortedCredits) {
+        if (credit.currentBalance().cents() <= 0) continue;
         DebtPayoffPlan plan;
         plan.creditName = credit.name();
         plan.currentBalance = credit.currentBalance();

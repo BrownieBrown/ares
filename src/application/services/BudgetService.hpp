@@ -77,10 +77,17 @@ struct FinancialRecommendation {
     core::Money currentEmergencyFund;    // User needs to set this
     core::Money targetEmergencyFund;     // 3 months of expenses
     bool emergencyFundComplete;
+
+    // Low-interest strategy: when all debts are below threshold, prioritize savings/investment
+    bool allDebtsLowInterest = false;
 };
 
 class BudgetService {
 public:
+    // When all active debts have interest rates below this threshold,
+    // prioritize savings/investment over extra debt payments
+    static constexpr double kLowInterestThreshold = 0.05;
+
     BudgetService() = default;
 
     // Calculate budget for current month from transactions

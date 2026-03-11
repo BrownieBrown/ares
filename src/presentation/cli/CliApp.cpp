@@ -950,9 +950,15 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         if (!credits->empty()) {
             recommendation = budgetService.calculateRecommendation(current, *credits, currentEmergencyFund, core::today());
 
-            auto halfAvailable = finalAvailable.cents() / 2;
-            extraDebt = core::Money{halfAvailable, core::Currency::EUR};
-            toSavings = core::Money{finalAvailable.cents() - halfAvailable, core::Currency::EUR};
+            if (recommendation->allDebtsLowInterest) {
+                // Low-interest strategy: only minimum payments, all extra to savings
+                extraDebt = core::Money{0, core::Currency::EUR};
+                toSavings = finalAvailable;
+            } else {
+                auto halfAvailable = finalAvailable.cents() / 2;
+                extraDebt = core::Money{halfAvailable, core::Currency::EUR};
+                toSavings = core::Money{finalAvailable.cents() - halfAvailable, core::Currency::EUR};
+            }
 
             auto extraRemaining = extraDebt;
             for (const auto& plan : recommendation->debtPayoffPlans) {
@@ -1124,7 +1130,11 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         // Debt payoff recommendation (uses pre-computed recommendedDebtPayments)
         if (recommendation) {
             fmt::print("{}💡 DEBT PAYOFF RECOMMENDATION{}\n", BOLD, RESET);
-            fmt::print("{}Using avalanche method (highest interest first){}\n\n", DIM, RESET);
+            if (recommendation->allDebtsLowInterest) {
+                fmt::print("{}Minimum payments only — low interest, investing extra is more profitable{}\n\n", DIM, RESET);
+            } else {
+                fmt::print("{}Using avalanche method (highest interest first){}\n\n", DIM, RESET);
+            }
 
             fmt::print("  {}{:<22}  {:>12}  {:>10}  {:>8}  {:>8}{}\n",
                 DIM, "Debt", "Balance", "Pay", "Rate", "Payoff", RESET);
@@ -1174,8 +1184,10 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             fmt::print("{}🎯 DEBT-FREE DATE: {}{} {}{}\n\n",
                 BOLD, GREEN, monthName(freeMonth), freeYear, RESET);
 
-            // Emergency fund status
-            if (!recommendation->emergencyFundComplete) {
+            // Strategy status
+            if (recommendation->allDebtsLowInterest) {
+                fmt::print("{}📈 All debts below 5% — prioritizing savings/investment over extra debt payments{}\n\n", GREEN, RESET);
+            } else if (!recommendation->emergencyFundComplete) {
                 fmt::print("{}⚠️  Emergency fund not complete. Current: {} / Target: {} (3 months expenses){}\n",
                     YELLOW, currentEmergencyFund.toStringDutch(), recommendation->targetEmergencyFund.toStringDutch(), RESET);
                 fmt::print("{}   Currently splitting available funds: 50% debt, 50% savings{}\n\n", DIM, RESET);
