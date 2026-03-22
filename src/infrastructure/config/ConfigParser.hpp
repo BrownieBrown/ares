@@ -11,6 +11,7 @@
 #include "core/transaction/Transaction.hpp"
 #include "core/account/Account.hpp"
 #include "core/credit/Credit.hpp"
+#include "infrastructure/config/ConfigUtils.hpp"
 
 namespace ares::infrastructure::config {
 
@@ -135,25 +136,6 @@ private:
     [[nodiscard]] auto parseImportFormatLine(std::string_view line, std::string_view rawLine, int lineNumber)
         -> std::expected<ConfiguredImportFormat, core::ParseError>;
 
-    // Helper functions
-    [[nodiscard]] static auto parseFrequency(std::string_view str)
-        -> std::optional<core::RecurrenceFrequency>;
-
-    [[nodiscard]] static auto parseCategory(std::string_view str)
-        -> std::optional<core::TransactionCategory>;
-
-    [[nodiscard]] static auto parseCreditType(std::string_view str)
-        -> std::optional<core::CreditType>;
-
-    [[nodiscard]] static auto parseAccountType(std::string_view str)
-        -> std::optional<core::AccountType>;
-
-    [[nodiscard]] static auto parseBankId(std::string_view str)
-        -> std::optional<core::BankIdentifier>;
-
-    [[nodiscard]] static auto parseAmount(std::string_view str)
-        -> std::optional<core::Money>;
-
     // Tokenize a line respecting quoted strings
     [[nodiscard]] static auto tokenize(std::string_view line)
         -> std::vector<std::string>;
@@ -161,10 +143,6 @@ private:
     // Pattern matching with * wildcard support
     [[nodiscard]] static auto matchesPattern(std::string_view pattern, std::string_view text)
         -> bool;
-
-    // Suggest closest matching category name for typos
-    [[nodiscard]] static auto suggestCategory(std::string_view input)
-        -> std::string;
 };
 
 } // namespace ares::infrastructure::config
