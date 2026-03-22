@@ -59,6 +59,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(CLI11)
 
+# yaml-cpp for YAML config parsing
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG 0.8.0
+)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(yaml-cpp)
+
 # ============================================================
 # Compiler warnings
 # ============================================================
@@ -129,7 +140,7 @@ add_library(ares_infrastructure STATIC
 )
 target_include_directories(ares_infrastructure PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ares_infrastructure
-    PUBLIC ares_core SQLite::SQLite3
+    PUBLIC ares_core SQLite::SQLite3 yaml-cpp::yaml-cpp
     PRIVATE ares_warnings
 )
 
