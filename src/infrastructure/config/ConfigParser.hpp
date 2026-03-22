@@ -11,7 +11,6 @@
 #include "core/transaction/Transaction.hpp"
 #include "core/account/Account.hpp"
 #include "core/credit/Credit.hpp"
-#include "infrastructure/config/ConfigUtils.hpp"
 
 namespace ares::infrastructure::config {
 

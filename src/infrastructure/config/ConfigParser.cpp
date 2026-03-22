@@ -1,4 +1,5 @@
 #include "infrastructure/config/ConfigParser.hpp"
+#include "infrastructure/config/ConfigUtils.hpp"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
