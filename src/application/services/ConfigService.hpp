@@ -9,6 +9,8 @@
 #include "core/credit/Credit.hpp"
 #include "core/account/Account.hpp"
 #include "infrastructure/config/ConfigParser.hpp"
+#include "infrastructure/config/ConfigWriter.hpp"
+#include "infrastructure/config/YamlConfigParser.hpp"
 
 namespace ares::application::services {
 
@@ -16,7 +18,7 @@ class ConfigService {
 public:
     ConfigService() = default;
 
-    // Load user configuration from default path (~/.ares/config.txt)
+    // Load user configuration from default path (config.yaml or ~/.ares/config.yaml)
     [[nodiscard]] auto loadConfig()
         -> std::expected<infrastructure::config::UserConfig, core::Error>;
 
@@ -63,6 +65,48 @@ public:
 
     // Create a default sample config file
     [[nodiscard]] auto createSampleConfig()
+        -> std::expected<void, core::Error>;
+
+    // Check for old-format config that needs migration
+    [[nodiscard]] auto hasLegacyConfig() const -> bool;
+    [[nodiscard]] auto getLegacyConfigPath() const -> std::filesystem::path;
+
+    // Interactive add/remove (delegates to ConfigWriter)
+    [[nodiscard]] auto addExpense(const std::string& name, core::Money amount,
+                                   core::RecurrenceFrequency frequency,
+                                   core::TransactionCategory category)
+        -> std::expected<void, core::Error>;
+    [[nodiscard]] auto removeExpense(size_t index)
+        -> std::expected<void, core::Error>;
+
+    [[nodiscard]] auto addIncome(const std::string& name, core::Money amount,
+                                  core::RecurrenceFrequency frequency,
+                                  core::TransactionCategory category)
+        -> std::expected<void, core::Error>;
+    [[nodiscard]] auto removeIncome(size_t index)
+        -> std::expected<void, core::Error>;
+
+    [[nodiscard]] auto addRule(const std::string& pattern,
+                                core::TransactionCategory category)
+        -> std::expected<void, core::Error>;
+    [[nodiscard]] auto removeRule(size_t index)
+        -> std::expected<void, core::Error>;
+
+    [[nodiscard]] auto addBudget(core::TransactionCategory category, core::Money limit)
+        -> std::expected<void, core::Error>;
+    [[nodiscard]] auto removeBudget(size_t index)
+        -> std::expected<void, core::Error>;
+
+    [[nodiscard]] auto addCredit(const std::string& name, core::CreditType type,
+                                  core::Money balance, double rate,
+                                  core::Money minPayment,
+                                  std::optional<core::Money> original = std::nullopt)
+        -> std::expected<void, core::Error>;
+    [[nodiscard]] auto removeCredit(size_t index)
+        -> std::expected<void, core::Error>;
+
+    // Migration
+    [[nodiscard]] auto migrateConfig()
         -> std::expected<void, core::Error>;
 
 private:

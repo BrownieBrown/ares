@@ -2,21 +2,66 @@
 #include <fstream>
 #include <cstdlib>
 #include <fmt/format.h>
+#include "infrastructure/config/YamlConfigParser.hpp"
 
 namespace ares::application::services {
+
+auto ConfigService::getConfigPath() const -> std::filesystem::path {
+    // 1. Check CWD for config.yaml
+    auto localPath = std::filesystem::path{"config.yaml"};
+    if (std::filesystem::exists(localPath)) {
+        return localPath;
+    }
+    // 2. Fall back to ~/.ares/config.yaml
+    auto homeDir = std::getenv("HOME");
+    if (!homeDir) {
+        return localPath;
+    }
+    return std::filesystem::path{homeDir} / ".ares" / "config.yaml";
+}
+
+auto ConfigService::getLegacyConfigPath() const -> std::filesystem::path {
+    auto homeDir = std::getenv("HOME");
+    if (!homeDir) {
+        return std::filesystem::path{".ares"} / "config.txt";
+    }
+    return std::filesystem::path{homeDir} / ".ares" / "config.txt";
+}
+
+auto ConfigService::hasLegacyConfig() const -> bool {
+    return std::filesystem::exists(getLegacyConfigPath());
+}
 
 auto ConfigService::loadConfig()
     -> std::expected<infrastructure::config::UserConfig, core::Error>
 {
-    return loadConfig(getConfigPath());
+    auto yamlPath = getConfigPath();
+    if (std::filesystem::exists(yamlPath)) {
+        infrastructure::config::YamlConfigParser yamlParser;
+        return yamlParser.parse(yamlPath);
+    }
+
+    // Fall back to legacy config.txt
+    auto legacyPath = getLegacyConfigPath();
+    if (std::filesystem::exists(legacyPath)) {
+        fmt::print("Tip: Run 'ares config migrate' to upgrade to YAML format\n");
+        infrastructure::config::ConfigParser parser;
+        return parser.parse(legacyPath);
+    }
+
+    return infrastructure::config::UserConfig{};
 }
 
 auto ConfigService::loadConfig(const std::filesystem::path& path)
     -> std::expected<infrastructure::config::UserConfig, core::Error>
 {
     if (!std::filesystem::exists(path)) {
-        // Return empty config if file doesn't exist
         return infrastructure::config::UserConfig{};
+    }
+
+    if (path.extension() == ".yaml" || path.extension() == ".yml") {
+        infrastructure::config::YamlConfigParser yamlParser;
+        return yamlParser.parse(path);
     }
 
     infrastructure::config::ConfigParser parser;
@@ -27,22 +72,19 @@ auto ConfigService::configExists() const -> bool {
     return std::filesystem::exists(getConfigPath());
 }
 
-auto ConfigService::getConfigPath() const -> std::filesystem::path {
-    auto homeDir = std::getenv("HOME");
-    if (!homeDir) {
-        return std::filesystem::path{".ares"} / "config.txt";
-    }
-    return std::filesystem::path{homeDir} / ".ares" / "config.txt";
-}
-
 auto ConfigService::validateConfig(const std::filesystem::path& path)
     -> std::expected<void, core::Error>
 {
+    if (path.extension() == ".yaml" || path.extension() == ".yml") {
+        infrastructure::config::YamlConfigParser yamlParser;
+        auto result = yamlParser.parse(path);
+        if (!result) return std::unexpected(result.error());
+        return {};
+    }
+
     infrastructure::config::ConfigParser parser;
     auto result = parser.parse(path);
-    if (!result) {
-        return std::unexpected(result.error());
-    }
+    if (!result) return std::unexpected(result.error());
     return {};
 }
 
@@ -168,7 +210,7 @@ auto ConfigService::createSampleConfig()
 
     // Create directory if it doesn't exist
     auto parentDir = configPath.parent_path();
-    if (!std::filesystem::exists(parentDir)) {
+    if (!parentDir.empty() && !std::filesystem::exists(parentDir)) {
         std::filesystem::create_directories(parentDir);
     }
 
@@ -188,61 +230,218 @@ auto ConfigService::createSampleConfig()
         });
     }
 
-    file << R"(# Ares Configuration File
-# ========================
-# Lines starting with # are comments
+    file << R"(# Ares Configuration File (YAML format)
+# =========================================
 # All amounts are in EUR
 
 # ====================
 # Custom Categorization Rules
 # ====================
-# Format: categorize <pattern> as <category>
-# Pattern supports * wildcard for matching
-# Examples:
-# categorize ovh as salary
-# categorize paypal*hosting as salary
-# categorize trade republic as investment
+# categorize:
+#   - pattern: "ovh"
+#     category: "hosting"
+#   - pattern: "paypal*hosting"
+#     category: "hosting"
+#   - pattern: "trade republic"
+#     category: "investment"
+categorize: []
 
 # ====================
 # Known Recurring Income
 # ====================
-# Format: income "Name" <amount> <frequency> [category]
 # Frequencies: weekly, biweekly, monthly, quarterly, annual
-# Examples:
-# income "Company Salary" 5000.00 monthly salary
-# income "Freelance Work" 1500.00 monthly freelance
+# income:
+#   - name: "Company Salary"
+#     amount: 5000.00
+#     frequency: monthly
+#     category: salary
+#   - name: "Freelance Work"
+#     amount: 1500.00
+#     frequency: monthly
+#     category: freelance
+income: []
 
 # ====================
 # Known Recurring Expenses
 # ====================
-# Format: expense "Name" <amount> <frequency> [category]
-# Examples:
-# expense "Apartment Rent" 1200.00 monthly housing
-# expense "Health Insurance" 200.00 monthly insurance
-# expense "Netflix" 17.99 monthly subscriptions
-# expense "Gym Membership" 29.99 monthly healthcare
+# expenses:
+#   - name: "Apartment Rent"
+#     amount: 1200.00
+#     frequency: monthly
+#     category: housing
+#   - name: "Health Insurance"
+#     amount: 200.00
+#     frequency: monthly
+#     category: insurance
+#   - name: "Netflix"
+#     amount: 17.99
+#     frequency: monthly
+#     category: subscriptions
+#   - name: "Gym Membership"
+#     amount: 29.99
+#     frequency: monthly
+#     category: healthcare
+expenses: []
 
 # ====================
 # Credits and Loans
 # ====================
-# Format: credit "Name" <type> <balance> <rate> <min-payment> [original-amount]
 # Types: student-loan, personal-loan, line-of-credit, credit-card, mortgage, car-loan, other
 # Rate is the annual interest rate as a percentage (e.g., 7.99 for 7.99%)
-# Examples:
-# credit "KfW Studienkredit" student-loan 8500.00 0.75 150.00 10000.00
-# credit "ING Rahmenkredit" line-of-credit 2000.00 7.99 50.00
+# credits:
+#   - name: "KfW Studienkredit"
+#     type: student-loan
+#     balance: 8500.00
+#     rate: 0.75
+#     min_payment: 150.00
+#     original: 10000.00
+#   - name: "ING Rahmenkredit"
+#     type: line-of-credit
+#     balance: 2000.00
+#     rate: 7.99
+#     min_payment: 50.00
+credits: []
+
+# ====================
+# Budgets
+# ====================
+# budgets:
+#   - category: groceries
+#     limit: 400.00
+#   - category: dining
+#     limit: 200.00
+budgets: []
 
 # ====================
 # Accounts
 # ====================
-# Format: account "Name" <type> <bank> [balance]
 # Types: checking, savings, investment, credit-card
 # Banks: ing, trade-republic, consorsbank, abn-amro, rabobank, bunq, degiro, generic
-# Examples:
-# account "ING Girokonto" checking ing 5000.00
-# account "Trade Republic" investment trade-republic 15000.00
-# account "Consorsbank Tagesgeld" savings consorsbank 10000.00
+# accounts:
+#   - name: "ING Girokonto"
+#     type: checking
+#     bank: ing
+#     balance: 5000.00
+#   - name: "Trade Republic"
+#     type: investment
+#     bank: trade-republic
+#     balance: 15000.00
+#   - name: "Consorsbank Tagesgeld"
+#     type: savings
+#     bank: consorsbank
+#     balance: 10000.00
+accounts: []
 )";
+
+    return {};
+}
+
+// Add/remove methods — thin wrappers around ConfigWriter
+
+auto ConfigService::addExpense(const std::string& name, core::Money amount,
+                                core::RecurrenceFrequency frequency,
+                                core::TransactionCategory category)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.addExpense(getConfigPath(), name, amount, frequency, category);
+}
+
+auto ConfigService::removeExpense(size_t index)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.removeExpense(getConfigPath(), index);
+}
+
+auto ConfigService::addIncome(const std::string& name, core::Money amount,
+                               core::RecurrenceFrequency frequency,
+                               core::TransactionCategory category)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.addIncome(getConfigPath(), name, amount, frequency, category);
+}
+
+auto ConfigService::removeIncome(size_t index)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.removeIncome(getConfigPath(), index);
+}
+
+auto ConfigService::addRule(const std::string& pattern,
+                             core::TransactionCategory category)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.addRule(getConfigPath(), pattern, category);
+}
+
+auto ConfigService::removeRule(size_t index)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.removeRule(getConfigPath(), index);
+}
+
+auto ConfigService::addBudget(core::TransactionCategory category, core::Money limit)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.addBudget(getConfigPath(), category, limit);
+}
+
+auto ConfigService::removeBudget(size_t index)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.removeBudget(getConfigPath(), index);
+}
+
+auto ConfigService::addCredit(const std::string& name, core::CreditType type,
+                               core::Money balance, double rate,
+                               core::Money minPayment,
+                               std::optional<core::Money> original)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.addCredit(getConfigPath(), name, type, balance, rate, minPayment, original);
+}
+
+auto ConfigService::removeCredit(size_t index)
+    -> std::expected<void, core::Error>
+{
+    infrastructure::config::ConfigWriter writer;
+    return writer.removeCredit(getConfigPath(), index);
+}
+
+auto ConfigService::migrateConfig()
+    -> std::expected<void, core::Error>
+{
+    auto legacyPath = getLegacyConfigPath();
+    if (!std::filesystem::exists(legacyPath)) {
+        return std::unexpected(core::IoError{
+            .path = legacyPath.string(),
+            .message = "Legacy config file not found"
+        });
+    }
+
+    // Parse old format
+    infrastructure::config::ConfigParser parser;
+    auto config = parser.parse(legacyPath);
+    if (!config) return std::unexpected(config.error());
+
+    // Write as YAML
+    auto yamlPath = getConfigPath();
+    infrastructure::config::ConfigWriter writer;
+    auto writeResult = writer.writeConfig(yamlPath, *config);
+    if (!writeResult) return std::unexpected(writeResult.error());
+
+    // Backup old file
+    auto backupPath = legacyPath;
+    backupPath += ".bak";
+    std::filesystem::rename(legacyPath, backupPath);
 
     return {};
 }
