@@ -4,7 +4,6 @@
 #include "infrastructure/config/YamlConfigParser.hpp"
 #include "infrastructure/config/ConfigWriter.hpp"
 #include <filesystem>
-#include <fstream>
 
 using namespace ares::infrastructure::config;
 using namespace ares::core;
