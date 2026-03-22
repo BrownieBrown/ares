@@ -128,6 +128,7 @@ add_library(ares_infrastructure STATIC
     src/infrastructure/import/GenericCsvImporter.cpp
     src/infrastructure/config/ConfigParser.cpp
     src/infrastructure/config/ConfigUtils.cpp
+    src/infrastructure/config/YamlConfigParser.cpp
     src/infrastructure/persistence/DatabaseConnection.cpp
     src/infrastructure/persistence/SqliteTransactionRepository.cpp
     src/infrastructure/persistence/SqliteAccountRepository.cpp
@@ -203,6 +204,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/GenericCsvImporterTests.cpp
         tests/unit/infrastructure/ConfigParserTests.cpp
         tests/unit/infrastructure/ConfigUtilsTests.cpp
+        tests/unit/infrastructure/YamlConfigParserTests.cpp
         tests/unit/infrastructure/MigrationRunnerTests.cpp
         tests/unit/services/RecurrenceDetectorTests.cpp
         tests/unit/services/BudgetServiceTests.cpp
