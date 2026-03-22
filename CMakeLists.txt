@@ -207,6 +207,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/ConfigUtilsTests.cpp
         tests/unit/infrastructure/YamlConfigParserTests.cpp
         tests/unit/infrastructure/ConfigWriterTests.cpp
+        tests/unit/infrastructure/ConfigMigrationTests.cpp
         tests/unit/infrastructure/MigrationRunnerTests.cpp
         tests/unit/services/RecurrenceDetectorTests.cpp
         tests/unit/services/BudgetServiceTests.cpp
