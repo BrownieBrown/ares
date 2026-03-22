@@ -8,7 +8,6 @@
 #include "core/common/Money.hpp"
 #include "core/transaction/Transaction.hpp"
 #include "core/credit/Credit.hpp"
-#include "core/account/Account.hpp"
 #include "infrastructure/config/ConfigParser.hpp"  // For UserConfig
 
 namespace ares::infrastructure::config {
