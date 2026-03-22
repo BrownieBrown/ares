@@ -15,6 +15,7 @@
 #include "infrastructure/persistence/SqliteRecurringPatternRepository.hpp"
 #include "infrastructure/persistence/SqliteAdjustmentRepository.hpp"
 #include "infrastructure/config/ConfigParser.hpp"
+#include "infrastructure/config/ConfigUtils.hpp"
 #include "core/transaction/Adjustment.hpp"
 #include "application/services/RecurrenceDetector.hpp"
 #include "application/services/BudgetService.hpp"
@@ -1598,17 +1599,580 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         [[maybe_unused]] auto result = std::system(cmd.c_str());
     });
 
+    // Config add subcommand group
+    auto* config_add_cmd = config_cmd->add_subcommand("add", "Add a config entry");
+
+    // Config add expense
+    auto* config_add_expense_cmd = config_add_cmd->add_subcommand("expense", "Add a recurring expense");
+    std::string add_expense_name;
+    double add_expense_amount = 0.0;
+    std::string add_expense_frequency;
+    std::string add_expense_category;
+    config_add_expense_cmd->add_option("--name,-n", add_expense_name, "Expense name");
+    config_add_expense_cmd->add_option("--amount,-a", add_expense_amount, "Amount");
+    config_add_expense_cmd->add_option("--frequency,-f", add_expense_frequency, "Frequency (monthly, weekly, etc.)");
+    config_add_expense_cmd->add_option("--category,-c", add_expense_category, "Category");
+
+    config_add_expense_cmd->callback([&]() {
+        std::string input;
+
+        if (add_expense_name.empty()) {
+            fmt::print("  Name: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_expense_name = input;
+        }
+
+        if (add_expense_amount <= 0.0) {
+            fmt::print("  Amount: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_expense_amount = std::stod(input); } catch (...) { fmt::print("Invalid amount.\n"); return; }
+        }
+
+        core::RecurrenceFrequency parsedFreq;
+        if (add_expense_frequency.empty()) {
+            fmt::print("  Frequency (monthly/weekly/yearly/quarterly/biweekly): ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_expense_frequency = input;
+        }
+        auto freqOpt = infrastructure::config::parseFrequency(add_expense_frequency);
+        if (!freqOpt) { fmt::print("Invalid frequency: {}\n", add_expense_frequency); return; }
+        parsedFreq = *freqOpt;
+
+        core::TransactionCategory parsedCat;
+        if (add_expense_category.empty()) {
+            fmt::print("  Category: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_expense_category = input;
+        }
+        auto catOpt = infrastructure::config::parseCategory(add_expense_category);
+        if (!catOpt) { fmt::print("Invalid category: {}\n", add_expense_category); return; }
+        parsedCat = *catOpt;
+
+        auto amountMoney = core::Money::fromDouble(add_expense_amount, core::Currency::EUR);
+        if (!amountMoney) { fmt::print("Invalid amount.\n"); return; }
+
+        application::services::ConfigService configService;
+        auto result = configService.addExpense(add_expense_name, *amountMoney, parsedFreq, parsedCat);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+
+        fmt::print("  Added expense: {}  {}  {} ({})\n",
+                   add_expense_name, amountMoney->toStringDutch(),
+                   core::recurrenceFrequencyName(parsedFreq), core::categoryName(parsedCat));
+    });
+
+    // Config add income
+    auto* config_add_income_cmd = config_add_cmd->add_subcommand("income", "Add a recurring income");
+    std::string add_income_name;
+    double add_income_amount = 0.0;
+    std::string add_income_frequency;
+    std::string add_income_category;
+    config_add_income_cmd->add_option("--name,-n", add_income_name, "Income name");
+    config_add_income_cmd->add_option("--amount,-a", add_income_amount, "Amount");
+    config_add_income_cmd->add_option("--frequency,-f", add_income_frequency, "Frequency (monthly, weekly, etc.)");
+    config_add_income_cmd->add_option("--category,-c", add_income_category, "Category");
+
+    config_add_income_cmd->callback([&]() {
+        std::string input;
+
+        if (add_income_name.empty()) {
+            fmt::print("  Name: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_income_name = input;
+        }
+
+        if (add_income_amount <= 0.0) {
+            fmt::print("  Amount: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_income_amount = std::stod(input); } catch (...) { fmt::print("Invalid amount.\n"); return; }
+        }
+
+        core::RecurrenceFrequency parsedFreq;
+        if (add_income_frequency.empty()) {
+            fmt::print("  Frequency (monthly/weekly/yearly/quarterly/biweekly): ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_income_frequency = input;
+        }
+        auto freqOpt = infrastructure::config::parseFrequency(add_income_frequency);
+        if (!freqOpt) { fmt::print("Invalid frequency: {}\n", add_income_frequency); return; }
+        parsedFreq = *freqOpt;
+
+        core::TransactionCategory parsedCat;
+        if (add_income_category.empty()) {
+            fmt::print("  Category: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_income_category = input;
+        }
+        auto catOpt = infrastructure::config::parseCategory(add_income_category);
+        if (!catOpt) { fmt::print("Invalid category: {}\n", add_income_category); return; }
+        parsedCat = *catOpt;
+
+        auto amountMoney = core::Money::fromDouble(add_income_amount, core::Currency::EUR);
+        if (!amountMoney) { fmt::print("Invalid amount.\n"); return; }
+
+        application::services::ConfigService configService;
+        auto result = configService.addIncome(add_income_name, *amountMoney, parsedFreq, parsedCat);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+
+        fmt::print("  Added income: {}  {}  {} ({})\n",
+                   add_income_name, amountMoney->toStringDutch(),
+                   core::recurrenceFrequencyName(parsedFreq), core::categoryName(parsedCat));
+    });
+
+    // Config add rule
+    auto* config_add_rule_cmd = config_add_cmd->add_subcommand("rule", "Add a categorization rule");
+    std::string add_rule_pattern;
+    std::string add_rule_category;
+    config_add_rule_cmd->add_option("--pattern,-p", add_rule_pattern, "Match pattern");
+    config_add_rule_cmd->add_option("--category,-c", add_rule_category, "Category");
+
+    config_add_rule_cmd->callback([&]() {
+        std::string input;
+
+        if (add_rule_pattern.empty()) {
+            fmt::print("  Pattern: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_rule_pattern = input;
+        }
+
+        core::TransactionCategory parsedCat;
+        if (add_rule_category.empty()) {
+            fmt::print("  Category: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_rule_category = input;
+        }
+        auto catOpt = infrastructure::config::parseCategory(add_rule_category);
+        if (!catOpt) { fmt::print("Invalid category: {}\n", add_rule_category); return; }
+        parsedCat = *catOpt;
+
+        application::services::ConfigService configService;
+        auto result = configService.addRule(add_rule_pattern, parsedCat);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+
+        fmt::print("  Added rule: {} => {}\n", add_rule_pattern, core::categoryName(parsedCat));
+    });
+
+    // Config add budget
+    auto* config_add_budget_cmd = config_add_cmd->add_subcommand("budget", "Add a category budget");
+    std::string add_budget_category;
+    double add_budget_limit = 0.0;
+    config_add_budget_cmd->add_option("--category,-c", add_budget_category, "Category");
+    config_add_budget_cmd->add_option("--limit,-l", add_budget_limit, "Monthly limit");
+
+    config_add_budget_cmd->callback([&]() {
+        std::string input;
+
+        core::TransactionCategory parsedCat;
+        if (add_budget_category.empty()) {
+            fmt::print("  Category: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_budget_category = input;
+        }
+        auto catOpt = infrastructure::config::parseCategory(add_budget_category);
+        if (!catOpt) { fmt::print("Invalid category: {}\n", add_budget_category); return; }
+        parsedCat = *catOpt;
+
+        if (add_budget_limit <= 0.0) {
+            fmt::print("  Limit: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_budget_limit = std::stod(input); } catch (...) { fmt::print("Invalid amount.\n"); return; }
+        }
+
+        auto limitMoney = core::Money::fromDouble(add_budget_limit, core::Currency::EUR);
+        if (!limitMoney) { fmt::print("Invalid amount.\n"); return; }
+
+        application::services::ConfigService configService;
+        auto result = configService.addBudget(parsedCat, *limitMoney);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+
+        fmt::print("  Added budget: {} limit {}\n", core::categoryName(parsedCat), limitMoney->toStringDutch());
+    });
+
+    // Config add credit
+    auto* config_add_credit_cmd = config_add_cmd->add_subcommand("credit", "Add a credit/loan");
+    std::string add_credit_name;
+    std::string add_credit_type;
+    double add_credit_balance = 0.0;
+    double add_credit_rate = 0.0;
+    double add_credit_min_payment = 0.0;
+    double add_credit_original = 0.0;
+    config_add_credit_cmd->add_option("--name,-n", add_credit_name, "Credit name");
+    config_add_credit_cmd->add_option("--type,-t", add_credit_type, "Type (student-loan, personal-loan, etc.)");
+    config_add_credit_cmd->add_option("--balance,-b", add_credit_balance, "Current balance");
+    config_add_credit_cmd->add_option("--rate,-r", add_credit_rate, "Interest rate (e.g., 7.99)");
+    config_add_credit_cmd->add_option("--min-payment,-m", add_credit_min_payment, "Minimum monthly payment");
+    config_add_credit_cmd->add_option("--original,-o", add_credit_original, "Original amount (optional)");
+
+    config_add_credit_cmd->callback([&]() {
+        std::string input;
+
+        if (add_credit_name.empty()) {
+            fmt::print("  Name: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_credit_name = input;
+        }
+
+        core::CreditType parsedCreditType;
+        if (add_credit_type.empty()) {
+            fmt::print("  Type (student-loan/personal-loan/line-of-credit/credit-card/mortgage/car-loan/other): ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            add_credit_type = input;
+        }
+        auto typeOpt = application::services::CreditService::parseCreditType(add_credit_type);
+        if (!typeOpt) { fmt::print("Invalid credit type: {}\n", add_credit_type); return; }
+        parsedCreditType = *typeOpt;
+
+        if (add_credit_balance <= 0.0) {
+            fmt::print("  Current balance: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_credit_balance = std::stod(input); } catch (...) { fmt::print("Invalid amount.\n"); return; }
+        }
+
+        if (add_credit_rate <= 0.0) {
+            fmt::print("  Interest rate %%: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_credit_rate = std::stod(input); } catch (...) { fmt::print("Invalid rate.\n"); return; }
+        }
+
+        if (add_credit_min_payment <= 0.0) {
+            fmt::print("  Minimum monthly payment: ");
+            if (!std::getline(std::cin, input) || input.empty()) { fmt::print("Canceled.\n"); return; }
+            try { add_credit_min_payment = std::stod(input); } catch (...) { fmt::print("Invalid amount.\n"); return; }
+        }
+
+        auto balanceMoney = core::Money::fromDouble(add_credit_balance, core::Currency::EUR);
+        auto minPaymentMoney = core::Money::fromDouble(add_credit_min_payment, core::Currency::EUR);
+        if (!balanceMoney || !minPaymentMoney) { fmt::print("Invalid amount.\n"); return; }
+
+        std::optional<core::Money> originalMoney;
+        if (add_credit_original > 0.0) {
+            auto orig = core::Money::fromDouble(add_credit_original, core::Currency::EUR);
+            if (!orig) { fmt::print("Invalid original amount.\n"); return; }
+            originalMoney = *orig;
+        }
+
+        application::services::ConfigService configService;
+        auto result = configService.addCredit(add_credit_name, parsedCreditType,
+                                              *balanceMoney, add_credit_rate,
+                                              *minPaymentMoney, originalMoney);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+
+        fmt::print("  Added credit: {}  {}  {:.2f}%  Min: {}\n",
+                   add_credit_name, balanceMoney->toStringDutch(),
+                   add_credit_rate, minPaymentMoney->toStringDutch());
+    });
+
+    config_add_cmd->callback([&]() {
+        if (config_add_cmd->get_subcommands().empty()) {
+            fmt::print("{}", config_add_cmd->help());
+        }
+    });
+
+    // Config remove subcommand group
+    auto* config_remove_cmd = config_cmd->add_subcommand("remove", "Remove a config entry");
+
+    // Config remove expense
+    auto* config_remove_expense_cmd = config_remove_cmd->add_subcommand("expense", "Remove a recurring expense");
+    config_remove_expense_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->expenses.empty()) { fmt::print("No expenses configured.\n"); return; }
+
+        fmt::print("  EXPENSES\n");
+        for (size_t i = 0; i < configResult->expenses.size(); ++i) {
+            auto& exp = configResult->expenses[i];
+            auto catName = exp.category ? std::string(core::categoryName(*exp.category)) : "Unspecified";
+            fmt::print("  {:>2}. {:<28} {:>10}  {}  {}\n",
+                       i + 1, exp.name, exp.amount.toStringDutch(),
+                       core::recurrenceFrequencyName(exp.frequency), catName);
+        }
+
+        fmt::print("  Remove which? (number, or 'q' to cancel): ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty() || input == "q") { fmt::print("Canceled.\n"); return; }
+
+        size_t idx;
+        try { idx = std::stoul(input) - 1; } catch (...) { fmt::print("Invalid number.\n"); return; }
+        if (idx >= configResult->expenses.size()) { fmt::print("Invalid selection.\n"); return; }
+
+        auto removedName = configResult->expenses[idx].name;
+        auto result = configService.removeExpense(idx);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+        fmt::print("  Removed: {}\n", removedName);
+    });
+
+    // Config remove income
+    auto* config_remove_income_cmd = config_remove_cmd->add_subcommand("income", "Remove a recurring income");
+    config_remove_income_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->income.empty()) { fmt::print("No income configured.\n"); return; }
+
+        fmt::print("  INCOME\n");
+        for (size_t i = 0; i < configResult->income.size(); ++i) {
+            auto& inc = configResult->income[i];
+            auto catName = inc.category ? std::string(core::categoryName(*inc.category)) : "Unspecified";
+            fmt::print("  {:>2}. {:<28} {:>10}  {}  {}\n",
+                       i + 1, inc.name, inc.amount.toStringDutch(),
+                       core::recurrenceFrequencyName(inc.frequency), catName);
+        }
+
+        fmt::print("  Remove which? (number, or 'q' to cancel): ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty() || input == "q") { fmt::print("Canceled.\n"); return; }
+
+        size_t idx;
+        try { idx = std::stoul(input) - 1; } catch (...) { fmt::print("Invalid number.\n"); return; }
+        if (idx >= configResult->income.size()) { fmt::print("Invalid selection.\n"); return; }
+
+        auto removedName = configResult->income[idx].name;
+        auto result = configService.removeIncome(idx);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+        fmt::print("  Removed: {}\n", removedName);
+    });
+
+    // Config remove rule
+    auto* config_remove_rule_cmd = config_remove_cmd->add_subcommand("rule", "Remove a categorization rule");
+    config_remove_rule_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->categorizationRules.empty()) { fmt::print("No rules configured.\n"); return; }
+
+        fmt::print("  RULES\n");
+        for (size_t i = 0; i < configResult->categorizationRules.size(); ++i) {
+            auto& rule = configResult->categorizationRules[i];
+            fmt::print("  {:>2}. {:<30} => {}\n",
+                       i + 1, rule.pattern, core::categoryName(rule.category));
+        }
+
+        fmt::print("  Remove which? (number, or 'q' to cancel): ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty() || input == "q") { fmt::print("Canceled.\n"); return; }
+
+        size_t idx;
+        try { idx = std::stoul(input) - 1; } catch (...) { fmt::print("Invalid number.\n"); return; }
+        if (idx >= configResult->categorizationRules.size()) { fmt::print("Invalid selection.\n"); return; }
+
+        auto removedPattern = configResult->categorizationRules[idx].pattern;
+        auto result = configService.removeRule(idx);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+        fmt::print("  Removed: {}\n", removedPattern);
+    });
+
+    // Config remove budget
+    auto* config_remove_budget_cmd = config_remove_cmd->add_subcommand("budget", "Remove a category budget");
+    config_remove_budget_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->budgets.empty()) { fmt::print("No budgets configured.\n"); return; }
+
+        fmt::print("  BUDGETS\n");
+        for (size_t i = 0; i < configResult->budgets.size(); ++i) {
+            auto& budget = configResult->budgets[i];
+            fmt::print("  {:>2}. {:<28} {:>10}\n",
+                       i + 1, core::categoryName(budget.category), budget.limit.toStringDutch());
+        }
+
+        fmt::print("  Remove which? (number, or 'q' to cancel): ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty() || input == "q") { fmt::print("Canceled.\n"); return; }
+
+        size_t idx;
+        try { idx = std::stoul(input) - 1; } catch (...) { fmt::print("Invalid number.\n"); return; }
+        if (idx >= configResult->budgets.size()) { fmt::print("Invalid selection.\n"); return; }
+
+        auto removedCat = std::string(core::categoryName(configResult->budgets[idx].category));
+        auto result = configService.removeBudget(idx);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+        fmt::print("  Removed budget: {}\n", removedCat);
+    });
+
+    // Config remove credit
+    auto* config_remove_credit_cmd = config_remove_cmd->add_subcommand("credit", "Remove a credit/loan");
+    config_remove_credit_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->credits.empty()) { fmt::print("No credits configured.\n"); return; }
+
+        fmt::print("  CREDITS\n");
+        for (size_t i = 0; i < configResult->credits.size(); ++i) {
+            auto& credit = configResult->credits[i];
+            fmt::print("  {:>2}. {:<28} {:>10}  {:.2f}%  Min: {}\n",
+                       i + 1, credit.name, credit.balance.toStringDutch(),
+                       credit.interestRate, credit.minimumPayment.toStringDutch());
+        }
+
+        fmt::print("  Remove which? (number, or 'q' to cancel): ");
+        std::string input;
+        if (!std::getline(std::cin, input) || input.empty() || input == "q") { fmt::print("Canceled.\n"); return; }
+
+        size_t idx;
+        try { idx = std::stoul(input) - 1; } catch (...) { fmt::print("Invalid number.\n"); return; }
+        if (idx >= configResult->credits.size()) { fmt::print("Invalid selection.\n"); return; }
+
+        auto removedName = configResult->credits[idx].name;
+        auto result = configService.removeCredit(idx);
+        if (!result) { fmt::print("Error: {}\n", core::errorMessage(result.error())); return; }
+        fmt::print("  Removed: {}\n", removedName);
+    });
+
+    config_remove_cmd->callback([&]() {
+        if (config_remove_cmd->get_subcommands().empty()) {
+            fmt::print("{}", config_remove_cmd->help());
+        }
+    });
+
+    // Config list subcommand group
+    auto* config_list_cmd = config_cmd->add_subcommand("list", "List config entries");
+
+    // Config list expenses
+    auto* config_list_expenses_cmd = config_list_cmd->add_subcommand("expenses", "List recurring expenses");
+    config_list_expenses_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->expenses.empty()) { fmt::print("No expenses configured.\n"); return; }
+
+        fmt::print("  EXPENSES\n");
+        for (size_t i = 0; i < configResult->expenses.size(); ++i) {
+            auto& exp = configResult->expenses[i];
+            auto catName = exp.category ? std::string(core::categoryName(*exp.category)) : "Unspecified";
+            fmt::print("  {:>2}. {:<28} {:>10}  {}  {}\n",
+                       i + 1, exp.name, exp.amount.toStringDutch(),
+                       core::recurrenceFrequencyName(exp.frequency), catName);
+        }
+    });
+
+    // Config list income
+    auto* config_list_income_cmd = config_list_cmd->add_subcommand("income", "List recurring income");
+    config_list_income_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->income.empty()) { fmt::print("No income configured.\n"); return; }
+
+        fmt::print("  INCOME\n");
+        for (size_t i = 0; i < configResult->income.size(); ++i) {
+            auto& inc = configResult->income[i];
+            auto catName = inc.category ? std::string(core::categoryName(*inc.category)) : "Unspecified";
+            fmt::print("  {:>2}. {:<28} {:>10}  {}  {}\n",
+                       i + 1, inc.name, inc.amount.toStringDutch(),
+                       core::recurrenceFrequencyName(inc.frequency), catName);
+        }
+    });
+
+    // Config list rules
+    auto* config_list_rules_cmd = config_list_cmd->add_subcommand("rules", "List categorization rules");
+    config_list_rules_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->categorizationRules.empty()) { fmt::print("No rules configured.\n"); return; }
+
+        fmt::print("  RULES\n");
+        for (size_t i = 0; i < configResult->categorizationRules.size(); ++i) {
+            auto& rule = configResult->categorizationRules[i];
+            fmt::print("  {:>2}. {:<30} => {}\n",
+                       i + 1, rule.pattern, core::categoryName(rule.category));
+        }
+    });
+
+    // Config list budgets
+    auto* config_list_budgets_cmd = config_list_cmd->add_subcommand("budgets", "List category budgets");
+    config_list_budgets_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->budgets.empty()) { fmt::print("No budgets configured.\n"); return; }
+
+        fmt::print("  BUDGETS\n");
+        for (size_t i = 0; i < configResult->budgets.size(); ++i) {
+            auto& budget = configResult->budgets[i];
+            fmt::print("  {:>2}. {:<28} {:>10}\n",
+                       i + 1, core::categoryName(budget.category), budget.limit.toStringDutch());
+        }
+    });
+
+    // Config list credits
+    auto* config_list_credits_cmd = config_list_cmd->add_subcommand("credits", "List credits/loans");
+    config_list_credits_cmd->callback([&]() {
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        if (!configResult) { fmt::print("Error: {}\n", core::errorMessage(configResult.error())); return; }
+
+        if (configResult->credits.empty()) { fmt::print("No credits configured.\n"); return; }
+
+        fmt::print("  CREDITS\n");
+        for (size_t i = 0; i < configResult->credits.size(); ++i) {
+            auto& credit = configResult->credits[i];
+            fmt::print("  {:>2}. {:<28} {:>10}  {:.2f}%  Min: {}\n",
+                       i + 1, credit.name, credit.balance.toStringDutch(),
+                       credit.interestRate, credit.minimumPayment.toStringDutch());
+        }
+    });
+
+    config_list_cmd->callback([&]() {
+        if (config_list_cmd->get_subcommands().empty()) {
+            fmt::print("{}", config_list_cmd->help());
+        }
+    });
+
+    // Config migrate
+    auto* config_migrate_cmd = config_cmd->add_subcommand("migrate", "Migrate config.txt to config.yaml");
+    config_migrate_cmd->callback([&]() {
+        application::services::ConfigService configService;
+
+        if (!configService.hasLegacyConfig()) {
+            fmt::print("No legacy config.txt found.\n");
+            return;
+        }
+
+        auto yamlPath = configService.getConfigPath();
+        if (std::filesystem::exists(yamlPath)) {
+            fmt::print("config.yaml already exists: {}\n", yamlPath.string());
+            fmt::print("Delete it first if you want to re-migrate.\n");
+            return;
+        }
+
+        auto result = configService.migrateConfig();
+        if (!result) {
+            fmt::print("Migration failed: {}\n", core::errorMessage(result.error()));
+            return;
+        }
+
+        fmt::print("Migrated config to: {}\n", yamlPath.string());
+        fmt::print("Old config backed up to: {}.bak\n",
+                   configService.getLegacyConfigPath().string());
+    });
+
     config_cmd->callback([&]() {
         if (config_cmd->get_subcommands().empty()) {
             // Default: show path
             application::services::ConfigService configService;
             fmt::print("Config file: {}\n", configService.getConfigPath().string());
             fmt::print("\nSubcommands:\n");
-            fmt::print("  path   Show config file path\n");
-            fmt::print("  check  Validate config file\n");
-            fmt::print("  init   Create sample config file\n");
-            fmt::print("  show   Display parsed configuration\n");
-            fmt::print("  edit   Open config in editor\n");
+            fmt::print("  path     Show config file path\n");
+            fmt::print("  check    Validate config file\n");
+            fmt::print("  init     Create sample config file\n");
+            fmt::print("  show     Display parsed configuration\n");
+            fmt::print("  edit     Open config in editor\n");
+            fmt::print("  add      Add a config entry\n");
+            fmt::print("  remove   Remove a config entry\n");
+            fmt::print("  list     List config entries\n");
+            fmt::print("  migrate  Migrate config.txt to config.yaml\n");
         }
     });
 
