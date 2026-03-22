@@ -3,7 +3,6 @@
 #include "core/common/Money.hpp"
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
-#include <fstream>
 #include <string>
 
 namespace ares::infrastructure::config {
