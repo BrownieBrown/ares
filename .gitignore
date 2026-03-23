@@ -19,6 +19,7 @@ compile_commands.json
 # Bank CSV exports contain personal financial information
 data/
 *.csv
+config.yaml
 
 # User data directory (database, config, imports)
 # Located at ~/.ares/ - not in repo, but listed for awareness
