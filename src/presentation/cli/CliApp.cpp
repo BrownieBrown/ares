@@ -1361,6 +1361,104 @@ auto CliApp::run(int argc, char* argv[]) -> int {
     // Categorize subcommand
     auto* categorize_cmd = app.add_subcommand("categorize", "Re-categorize transactions");
 
+    auto* categorize_set = categorize_cmd->add_subcommand(
+        "set", "Set a manual category override for a transaction");
+    static std::string set_txn_id;
+    static std::string set_category;
+    categorize_set->add_option("txn-id", set_txn_id, "Transaction ID")->required();
+    categorize_set->add_option("category", set_category, "Category name (e.g. refund, healthcare, internal-transfer)")->required();
+    categorize_set->callback([&]() {
+        auto catOpt = infrastructure::config::parseCategory(set_category);
+        if (!catOpt) {
+            fmt::print("Error: unknown category '{}'.\n", set_category);
+            auto suggestion = infrastructure::config::suggestCategory(set_category);
+            if (!suggestion.empty()) {
+                fmt::print("Did you mean '{}'?\n", suggestion);
+            }
+            return;
+        }
+
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto found = txnRepo.findById(core::TransactionId{set_txn_id});
+        if (!found) {
+            fmt::print("Error: {}\n", core::errorMessage(found.error()));
+            return;
+        }
+        if (!found->has_value()) {
+            fmt::print("Error: transaction '{}' not found.\n", set_txn_id);
+            return;
+        }
+
+        auto txn = **found;
+        txn.setCategory(*catOpt);
+        txn.setUserCategoryOverride(*catOpt);
+        auto saved = txnRepo.update(txn);
+        if (!saved) {
+            fmt::print("Error: {}\n", core::errorMessage(saved.error()));
+            return;
+        }
+        fmt::print("Set {} → {} (override).\n", set_txn_id, core::categoryName(*catOpt));
+    });
+
+    auto* categorize_clear = categorize_cmd->add_subcommand(
+        "clear", "Clear the manual override on a transaction (matcher will re-categorize)");
+    static std::string clear_txn_id;
+    categorize_clear->add_option("txn-id", clear_txn_id, "Transaction ID")->required();
+    categorize_clear->callback([&]() {
+        auto dbResult = getDatabase();
+        if (!dbResult) {
+            fmt::print("Error: {}\n", core::errorMessage(dbResult.error()));
+            return;
+        }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        auto found = txnRepo.findById(core::TransactionId{clear_txn_id});
+        if (!found) {
+            fmt::print("Error: {}\n", core::errorMessage(found.error()));
+            return;
+        }
+        if (!found->has_value()) {
+            fmt::print("Error: transaction '{}' not found.\n", clear_txn_id);
+            return;
+        }
+
+        auto txn = **found;
+        if (!txn.userCategoryOverride()) {
+            fmt::print("No override set on {} (already auto-categorized as {}).\n",
+                       clear_txn_id, core::categoryName(txn.category()));
+            return;
+        }
+
+        txn.clearUserCategoryOverride();
+
+        // Re-run the matcher so the category reflects current rules instead of staying frozen.
+        application::services::ConfigService configService;
+        auto configResult = configService.loadConfig();
+        application::services::CategoryMatcher matcher;
+        if (configResult && !configResult->categorizationRules.empty()) {
+            matcher.setCustomRules(configResult->categorizationRules);
+        }
+        auto result = matcher.categorize(
+            txn.counterpartyName().value_or(""),
+            txn.description(),
+            txn.amount().cents());
+        txn.setCategory(result.category);
+
+        auto saved = txnRepo.update(txn);
+        if (!saved) {
+            fmt::print("Error: {}\n", core::errorMessage(saved.error()));
+            return;
+        }
+        fmt::print("Cleared override on {}; re-categorized as {}.\n",
+                   clear_txn_id, core::categoryName(result.category));
+    });
+
     auto* categorize_show = categorize_cmd->add_subcommand("show", "Show categorization rules");
     categorize_show->callback([&]() {
         application::services::ConfigService configService;
@@ -1405,7 +1503,13 @@ auto CliApp::run(int argc, char* argv[]) -> int {
             }
 
             int changed = 0;
+            int skipped = 0;
             for (auto& txn : *transactions) {
+                // Honor manual user overrides — never overwrite a category the user set explicitly.
+                if (txn.userCategoryOverride()) {
+                    ++skipped;
+                    continue;
+                }
                 auto result = matcher.categorize(
                     txn.counterpartyName().value_or(""),
                     txn.description(),
@@ -1417,7 +1521,8 @@ auto CliApp::run(int argc, char* argv[]) -> int {
                 }
             }
 
-            fmt::print("Re-categorized {} transactions.\n", changed);
+            fmt::print("Re-categorized {} transactions ({} preserved by user override).\n",
+                       changed, skipped);
 
             auto stats = matcher.getRuleStats();
             if (!stats.empty()) {
