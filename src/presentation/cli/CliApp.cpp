@@ -951,11 +951,15 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         if (!credits->empty()) {
             recommendation = budgetService.calculateRecommendation(current, *credits, currentEmergencyFund, core::today());
 
-            if (recommendation->allDebtsLowInterest) {
-                // Low-interest strategy: only minimum payments, all extra to savings
+            if (!recommendation->emergencyFundComplete || recommendation->allDebtsLowInterest) {
+                // Emergency-fund-first: while the buffer is still being built, or
+                // when all debts are below the interest threshold, pay debts only
+                // their minimums and route the entire surplus to savings.
                 extraDebt = core::Money{0, core::Currency::EUR};
                 toSavings = finalAvailable;
             } else {
+                // Buffer complete with high-interest debt: split surplus between
+                // extra debt payments (avalanche) and savings.
                 auto halfAvailable = finalAvailable.cents() / 2;
                 extraDebt = core::Money{halfAvailable, core::Currency::EUR};
                 toSavings = core::Money{finalAvailable.cents() - halfAvailable, core::Currency::EUR};
