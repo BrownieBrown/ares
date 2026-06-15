@@ -250,7 +250,9 @@ TEST_CASE("BudgetService low-interest threshold prioritizes savings", "[budget]"
         credits.push_back(std::move(lowInterest));
 
         auto budget = service.calculateCurrentMonth(transactions, patterns, credits, currentDate);
-        auto rec = service.calculateRecommendation(budget, credits, core::Money{0, core::Currency::EUR}, currentDate);
+        // Avalanche only kicks in once the emergency fund is complete; pass a
+        // buffer well above 3 months of expenses so extra payments are allocated.
+        auto rec = service.calculateRecommendation(budget, credits, core::Money{1000000, core::Currency::EUR}, currentDate);
 
         CHECK(rec.allDebtsLowInterest == false);
 
@@ -309,6 +311,87 @@ TEST_CASE("BudgetService low-interest threshold prioritizes savings", "[budget]"
         auto rec = service.calculateRecommendation(budget, credits, core::Money{0, core::Currency::EUR}, currentDate);
 
         CHECK(rec.allDebtsLowInterest == false);
+    }
+}
+
+TEST_CASE("BudgetService prioritizes emergency fund before extra debt", "[budget]") {
+    application::services::BudgetService service;
+
+    std::vector<core::Transaction> transactions;
+    std::vector<core::RecurringPattern> patterns;
+
+    core::RecurringPattern salary{
+        core::RecurringPatternId{"p-salary"},
+        "Employer",
+        core::Money{400000, core::Currency::EUR},  // 4000 EUR
+        core::RecurrenceFrequency::Monthly
+    };
+    salary.setCategory(core::TransactionCategory::Salary);
+    patterns.push_back(std::move(salary));
+
+    core::RecurringPattern rent{
+        core::RecurringPatternId{"p-rent"},
+        "Landlord",
+        core::Money{-100000, core::Currency::EUR},  // -1000 EUR
+        core::RecurrenceFrequency::Monthly
+    };
+    rent.setCategory(core::TransactionCategory::Housing);
+    patterns.push_back(std::move(rent));
+
+    core::Date currentDate{std::chrono::year{2024}, std::chrono::month{3}, std::chrono::day{15}};
+
+    // High-interest debt (8%, well above the 5% threshold) that would normally
+    // trigger avalanche extra payments.
+    std::vector<core::Credit> credits;
+    core::Credit highInterest{
+        core::CreditId{"hi"},
+        "High Interest Loan",
+        core::CreditType::PersonalLoan,
+        core::Money{500000, core::Currency::EUR},
+        core::Money{300000, core::Currency::EUR},
+        0.08,
+        core::InterestType::Fixed
+    };
+    highInterest.setMinimumPayment(core::Money{10000, core::Currency::EUR});
+    credits.push_back(std::move(highInterest));
+
+    auto budget = service.calculateCurrentMonth(transactions, patterns, credits, currentDate);
+
+    SECTION("emergency fund incomplete -> minimums only, full surplus to savings") {
+        // No emergency fund yet: building the buffer takes priority over
+        // attacking even high-interest debt.
+        auto rec = service.calculateRecommendation(
+            budget, credits, core::Money{0, core::Currency::EUR}, currentDate);
+
+        CHECK(rec.emergencyFundComplete == false);
+
+        // No extra debt payment: each debt gets only its minimum.
+        for (const auto& plan : rec.debtPayoffPlans) {
+            CHECK(plan.recommendedPayment.cents() == plan.minimumPayment.cents());
+        }
+
+        // The entire surplus is routed to savings, nothing to investment.
+        CHECK(rec.recommendedSavings.cents() == budget.availableForSavings.cents());
+        CHECK(rec.recommendedInvestment.cents() == 0);
+    }
+
+    SECTION("emergency fund complete -> avalanche extra payments resume") {
+        // Target emergency fund = 3 months of fixed expenses (3 * 1000 = 3000).
+        // Pass well above that so the buffer is complete.
+        auto rec = service.calculateRecommendation(
+            budget, credits, core::Money{1000000, core::Currency::EUR}, currentDate);
+
+        CHECK(rec.emergencyFundComplete == true);
+
+        // Now extra money flows to the highest-interest debt again.
+        bool hasExtra = false;
+        for (const auto& plan : rec.debtPayoffPlans) {
+            if (plan.recommendedPayment.cents() > plan.minimumPayment.cents()) {
+                hasExtra = true;
+            }
+        }
+        CHECK(hasExtra);
+        CHECK(rec.recommendedSavings.cents() == 0);
     }
 }
 

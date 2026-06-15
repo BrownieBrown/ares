@@ -378,25 +378,22 @@ auto BudgetService::calculateRecommendation(
 
     auto availableAfterMinimums = budget.availableForSavings;
 
-    if (rec.allDebtsLowInterest) {
-        // All debts below threshold: only pay minimums, all extra to savings/investment
+    if (!rec.emergencyFundComplete) {
+        // Emergency-fund-first: until the buffer is built, pay debts only their
+        // minimums and route the entire surplus to savings - regardless of
+        // interest rate. A cash buffer prevents new (often higher-rate) debt,
+        // so it takes priority over both extra debt payments and investing.
         extraForDebt = core::Money{0, core::Currency::EUR};
-        if (!rec.emergencyFundComplete) {
-            rec.recommendedSavings = availableAfterMinimums;
-            rec.recommendedInvestment = core::Money{0, core::Currency::EUR};
-        } else {
-            rec.recommendedSavings = core::Money{0, core::Currency::EUR};
-            rec.recommendedInvestment = availableAfterMinimums;
-        }
-    } else if (!rec.emergencyFundComplete) {
-        // Strategy: Pay minimums + allocate extra to highest interest debt
-        // Split available money: 50% savings, 50% extra debt payment
-        auto halfCents = availableAfterMinimums.cents() / 2;
-        rec.recommendedSavings = core::Money{halfCents, core::Currency::EUR};
-        extraForDebt = core::Money{availableAfterMinimums.cents() - halfCents, core::Currency::EUR};
+        rec.recommendedSavings = availableAfterMinimums;
         rec.recommendedInvestment = core::Money{0, core::Currency::EUR};
+    } else if (rec.allDebtsLowInterest) {
+        // Buffer complete and all debts below threshold: invest the surplus.
+        extraForDebt = core::Money{0, core::Currency::EUR};
+        rec.recommendedSavings = core::Money{0, core::Currency::EUR};
+        rec.recommendedInvestment = availableAfterMinimums;
     } else {
-        // Emergency fund complete: 70% extra debt, 30% investment
+        // Buffer complete with high-interest debt: avalanche.
+        // 70% extra debt (highest interest first), 30% investment.
         auto debtCents = (availableAfterMinimums.cents() * 70) / 100;
         auto investCents = availableAfterMinimums.cents() - debtCents;
         extraForDebt = core::Money{debtCents, core::Currency::EUR};
