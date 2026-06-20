@@ -233,6 +233,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/services/ImportServiceTests.cpp
         tests/unit/services/CreditServiceTests.cpp
         tests/unit/infrastructure/JsonDepTests.cpp
+        tests/unit/infrastructure/FakeHttpTransportTests.cpp
     )
     target_include_directories(ares_unit_tests
         PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
