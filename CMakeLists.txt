@@ -70,6 +70,17 @@ set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(yaml-cpp)
 
+# libcurl for HTTP (AI advisor -> Claude API)
+find_package(CURL REQUIRED)
+
+# nlohmann/json for request/response serialization
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # ============================================================
 # Compiler warnings
 # ============================================================
@@ -143,7 +154,7 @@ add_library(ares_infrastructure STATIC
 )
 target_include_directories(ares_infrastructure PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ares_infrastructure
-    PUBLIC ares_core SQLite::SQLite3 yaml-cpp::yaml-cpp
+    PUBLIC ares_core SQLite::SQLite3 yaml-cpp::yaml-cpp CURL::libcurl nlohmann_json::nlohmann_json
     PRIVATE ares_warnings
 )
 
@@ -220,6 +231,10 @@ if(ARES_BUILD_TESTS)
         tests/unit/services/TransactionServiceTests.cpp
         tests/unit/services/ImportServiceTests.cpp
         tests/unit/services/CreditServiceTests.cpp
+        tests/unit/infrastructure/JsonDepTests.cpp
+    )
+    target_include_directories(ares_unit_tests
+        PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
     )
     target_link_libraries(ares_unit_tests
         PRIVATE
