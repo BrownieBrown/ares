@@ -77,6 +77,15 @@ Format is auto-detected on import (`import <file>`), or forced with `--format`.
 - Categories applied on import; re-apply to existing rows with `categorize` (no subcommand).
   `categorize set <txn-id> <category>` sets a manual override that re-categorization never touches.
 
+### AI Advisor
+- `ares analyze [--months N]` sends financial data to the Claude API and prints a spending
+  analysis with suggestions. Requires `ANTHROPIC_API_KEY` in the environment.
+- Model is configured via `config.yaml` (`ai.model:`, default `claude-sonnet-4-6`).
+- Architecture: `infrastructure/ai/` holds an injectable `HttpTransport` (libcurl impl
+  `CurlHttpTransport`; tests use a fake) and `ClaudeClient` (Anthropic Messages API).
+  `application/services/AdvisorService` gathers repo data, builds the prompt payload, and
+  calls the client. No test performs real network I/O.
+
 ## Current Status
 Phase 1: Foundation - implementing core models (Money, Account, Transaction, Credit)
 
