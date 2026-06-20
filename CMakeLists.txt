@@ -152,6 +152,7 @@ add_library(ares_infrastructure STATIC
     src/infrastructure/persistence/TransactionRepository.cpp
     src/infrastructure/persistence/CreditRepository.cpp
     src/infrastructure/ai/ClaudeClient.cpp
+    src/infrastructure/ai/CurlHttpTransport.cpp
 )
 target_include_directories(ares_infrastructure PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ares_infrastructure
@@ -236,6 +237,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/JsonDepTests.cpp
         tests/unit/infrastructure/FakeHttpTransportTests.cpp
         tests/unit/infrastructure/ClaudeClientTests.cpp
+        tests/unit/infrastructure/CurlHttpTransportTests.cpp
     )
     target_include_directories(ares_unit_tests
         PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
