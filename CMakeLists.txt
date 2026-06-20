@@ -212,6 +212,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/core/MoneyTests.cpp
         tests/unit/core/AccountTests.cpp
         tests/unit/core/TransactionTests.cpp
+        tests/unit/core/AiErrorTests.cpp
         tests/unit/infrastructure/IngDeCsvImporterTests.cpp
         tests/unit/infrastructure/GenericCsvImporterTests.cpp
         tests/unit/infrastructure/ConfigParserTests.cpp

@@ -67,13 +67,48 @@ struct NotFoundError {
     }
 };
 
+struct ApiKeyMissingError {
+    [[nodiscard]] auto what() const -> std::string {
+        return "ANTHROPIC_API_KEY is not set";
+    }
+};
+
+struct HttpError {
+    std::string message;
+
+    [[nodiscard]] auto what() const -> std::string {
+        return fmt::format("HTTP error: {}", message);
+    }
+};
+
+struct ApiError {
+    int status{0};
+    std::string message;
+
+    [[nodiscard]] auto what() const -> std::string {
+        return fmt::format("Claude API error ({}): {}", status, message);
+    }
+};
+
+struct JsonParseError {
+    std::string message;
+
+    [[nodiscard]] auto what() const -> std::string {
+        return fmt::format("JSON error: {}", message);
+    }
+};
+
 using Error = std::variant<
     ParseError,
     ValidationError,
     IoError,
     DatabaseError,
     CurrencyMismatchError,
-    NotFoundError
+    NotFoundError,
+    ApiKeyMissingError,
+    HttpError,
+    ApiError,
+    JsonParseError
 >;
 
 [[nodiscard]] inline auto errorMessage(const Error& error) -> std::string {
