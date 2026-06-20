@@ -176,6 +176,7 @@ add_library(ares_application STATIC
     src/application/services/CategoryMatcher.cpp
     src/application/services/ReportService.cpp
     src/application/services/DuplicateDetector.cpp
+    src/application/services/AdvisorService.cpp
 )
 target_include_directories(ares_application PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(ares_application
@@ -239,6 +240,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/ClaudeClientTests.cpp
         tests/unit/infrastructure/CurlHttpTransportTests.cpp
         tests/unit/infrastructure/ConfigAiModelTests.cpp
+        tests/unit/application/AdvisorServiceTests.cpp
     )
     target_include_directories(ares_unit_tests
         PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
