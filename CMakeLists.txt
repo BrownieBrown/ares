@@ -241,6 +241,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/CurlHttpTransportTests.cpp
         tests/unit/infrastructure/ConfigAiModelTests.cpp
         tests/unit/application/AdvisorServiceTests.cpp
+        tests/unit/application/ApiKeyTests.cpp
     )
     target_include_directories(ares_unit_tests
         PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
