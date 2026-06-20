@@ -75,6 +75,7 @@ struct UserConfig {
     std::vector<ConfiguredAccount> accounts;
     std::vector<CategoryBudget> budgets;
     std::vector<ConfiguredImportFormat> importFormats;
+    std::string aiModel{"claude-sonnet-4-6"};
 
     [[nodiscard]] auto isEmpty() const -> bool {
         return categorizationRules.empty() && income.empty() &&

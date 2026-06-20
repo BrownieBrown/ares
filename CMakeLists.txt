@@ -238,6 +238,7 @@ if(ARES_BUILD_TESTS)
         tests/unit/infrastructure/FakeHttpTransportTests.cpp
         tests/unit/infrastructure/ClaudeClientTests.cpp
         tests/unit/infrastructure/CurlHttpTransportTests.cpp
+        tests/unit/infrastructure/ConfigAiModelTests.cpp
     )
     target_include_directories(ares_unit_tests
         PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit/infrastructure
