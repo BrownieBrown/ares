@@ -429,6 +429,10 @@ auto processDocument(const YAML::Node& doc)
         config.importFormats = std::move(*result);
     }
 
+    if (doc["ai"] && doc["ai"]["model"]) {
+        config.aiModel = doc["ai"]["model"].as<std::string>();
+    }
+
     return config;
 }
 

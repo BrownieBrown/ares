@@ -29,6 +29,10 @@
 #include "application/services/CreditService.hpp"
 #include "application/services/DuplicateDetector.hpp"
 #include "application/services/ReportService.hpp"
+#include "application/services/AdvisorService.hpp"
+#include "infrastructure/ai/ClaudeClient.hpp"
+#include "infrastructure/ai/CurlHttpTransport.hpp"
+#include "presentation/cli/ApiKey.hpp"
 #include "core/transaction/Transaction.hpp"
 #include "core/transaction/RecurringPattern.hpp"
 #include "core/account/Account.hpp"
@@ -2600,6 +2604,44 @@ auto CliApp::run(int argc, char* argv[]) -> int {
         if (report_cmd->get_subcommands().empty()) {
             fmt::print("{}", report_cmd->help());
         }
+    });
+
+    // AI advisor: analyze spending and suggest improvements via the Claude API.
+    auto* analyze_cmd = app.add_subcommand("analyze", "AI-powered spending analysis");
+    int analyze_months = 12;
+    analyze_cmd->add_option("--months", analyze_months, "Months of history to analyze");
+    analyze_cmd->callback([&]() {
+        auto key = presentation::cli::resolveApiKey();
+        if (!key) { fmt::print("Error: {}\n", core::errorMessage(key.error())); return; }
+
+        auto dbResult = getDatabase();
+        if (!dbResult) { fmt::print("Error: {}\n", core::errorMessage(dbResult.error())); return; }
+
+        infrastructure::persistence::SqliteTransactionRepository txnRepo{*dbResult};
+        infrastructure::persistence::SqliteAccountRepository acctRepo{*dbResult};
+        infrastructure::persistence::SqliteCreditRepository creditRepo{*dbResult};
+
+        auto txns = txnRepo.findAll();
+        if (!txns) { fmt::print("Error: {}\n", core::errorMessage(txns.error())); return; }
+        auto accts = acctRepo.findAll();
+        auto credits = creditRepo.findAll();
+
+        application::services::ConfigService configService;
+        auto cfg = configService.loadConfig();
+        infrastructure::config::UserConfig config =
+            cfg ? *cfg : infrastructure::config::UserConfig{};
+
+        infrastructure::ai::CurlHttpTransport transport;
+        infrastructure::ai::ClaudeClient client{transport, *key, config.aiModel};
+
+        fmt::print("Analyzing {} months with {}...\n\n", analyze_months, config.aiModel);
+        auto report = application::services::AdvisorService::generateReport(
+            client, *txns,
+            accts.value_or(std::vector<core::Account>{}),
+            credits.value_or(std::vector<core::Credit>{}),
+            config, analyze_months);
+        if (!report) { fmt::print("Error: {}\n", core::errorMessage(report.error())); return; }
+        fmt::print("{}\n", *report);
     });
 
     CLI11_PARSE(app, argc, argv);
